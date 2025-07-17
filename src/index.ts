@@ -3,19 +3,23 @@ import getRawBody from 'raw-body';
 import cors from 'cors';
 import { randomUUID } from 'crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
 import { PORT, SERVER_INFO } from './config';
-import { validateJwtToken } from './auth/jwtAuth';
 import { registerAllTools } from './tools';
+import { validateJwtToken } from './auth/jwtAuth';
 
 // Create Express app
 const app = express();
 
 // Middleware
-app.use(express.json());
-
+app.use((req, res, next) => {
+    if (req.path.startsWith('/mcp')) return next(); // MCP potrzebuje raw-body
+    express.json()(req, res, next); // reszta może korzystać z parsera
+  });
+  
 // Configure CORS for browser-based MCP clients
 app.use(cors({
   origin: '*', // Configure appropriately for production
@@ -29,95 +33,123 @@ const server = new McpServer(SERVER_INFO);
 // Register all MCP tools
 registerAllTools(server);
 
-// Store transports for each session type
-const transports = {
-  streamable: {} as Record<string, StreamableHTTPServerTransport>,
-  sse: {} as Record<string, SSEServerTransport>
-};
-
-// Store JWT tokens by session ID for SSE transport
-const sessionTokens = new Map<string, string>();
+// Store transports for session management
+const httpTransports: Record<string, StreamableHTTPServerTransport> = {};
+const sseTransports: Record<string, SSEServerTransport> = {};
 
 // Apply JWT authentication middleware to MCP routes
 app.use(['/mcp', '/sse', '/messages'], validateJwtToken);
 
-// Modern Streamable HTTP endpoint for current clients
-app.post('/mcp', async (req, res) => {
+// Combined MCP endpoint for all transport types
+app.all('/mcp', async (req, res) => {
   try {
     // Get the auth context - extract JWT token from Authorization header
     const authHeader = req.headers.authorization;
     const token = authHeader?.split(' ')[1];
     
-    // Check for existing session ID
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+    const transportType = req.query.transportType as string | undefined;
     
-    // Get the raw body first
-    const rawBody = await getRawBody(req, {
-      limit: '1mb',
-      encoding: 'utf-8'
-    });
-    
-    // Parse the message body
-    const messageBody = JSON.parse(rawBody.toString());
-    
-    // Check if this is an initialize request
-    const isInitRequest = messageBody.method === 'initialize' && 
-                         messageBody.jsonrpc === '2.0' &&
-                         messageBody.params && 
-                         messageBody.params.capability === 'tools';
-    
-    let transport: StreamableHTTPServerTransport;
-    if (sessionId && transports.streamable[sessionId]) {
-      // Reuse existing transport
-      transport = transports.streamable[sessionId];
-    } else if (!sessionId && isInitRequest) {
-      // New initialization request - create a new transport
-      transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: (sid: string) => {
-          // Store the transport by session ID
-          transports.streamable[sid] = transport;
-        },
-        // Enable DNS rebinding protection if running in production
-        enableDnsRebindingProtection: process.env.NODE_ENV === 'production',
-      });
+    // Handle SSE transport
+    if (transportType === 'sse') {
+      if (req.method !== 'GET') {
+        return res.status(405).json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'SSE requires GET method' },
+          id: null
+        });
+      }
       
-      // Clean up transport when closed
-      transport.onclose = () => {
-        if (transport.sessionId) {
-          console.log(`Cleaning up streamable session ${transport.sessionId}`);
-          delete transports.streamable[transport.sessionId];
-        }
-      };
+      // Create SSE transport and connect to server
+      const sseTransport = new SSEServerTransport('/messages', res);
       
       // Connect transport to MCP server
-      await server.connect(transport);
-    } else {
-      // Invalid request
-      return res.status(400).json({
-        jsonrpc: '2.0',
-        error: {
-          code: -32000,
-          message: 'Bad Request: No valid session ID provided',
-        },
-        id: null,
-      });
+      await server.connect(sseTransport);
+      
+      // SSE transport handles the response automatically when created with the response object
     }
     
-    // Inject token into context for tool handlers
-    if (!messageBody.params) {
-      messageBody.params = {};
-    }
-    messageBody.params.context = { jwtToken: token };
+    // Handle streamable HTTP transport
+    if (transportType === 'streamable-http' || !transportType) {
+      if (req.method !== 'POST') {
+        return res.status(405).json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Streamable HTTP requires POST method' },
+          id: null
+        });
+      }
+      
+      // Get raw body and parse as JSON
+      const rawBody = await getRawBody(req, {
+        limit: '1mb',
+        encoding: 'utf-8'
+      });
+      const messageBody = JSON.parse(rawBody.toString());
+      
+      // Check session ID
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      let transport: StreamableHTTPServerTransport;
+      
+      if (sessionId && httpTransports[sessionId]) {
+        // Reuse existing transport
+        transport = httpTransports[sessionId];
+      } else if (!sessionId && isInitializeRequest(messageBody)) {
+        // Create new transport for initialization request
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sid) => {
+            httpTransports[sid] = transport;
+          },
+          enableDnsRebindingProtection: process.env.NODE_ENV === 'production',
+        });
         
-    await transport.handleRequest(req, res, messageBody);
+        // Set up cleanup on close
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            console.log(`Cleaning up streamable session ${transport.sessionId}`);
+            delete httpTransports[transport.sessionId];
+          }
+        };
+        
+        // Connect to server
+        await server.connect(transport);
+      } else {
+        // Invalid request
+        return res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Missing or invalid session ID',
+          },
+          id: null,
+        });
+      }
+      
+      // Inject token into request context
+      if (!messageBody.params) {
+        messageBody.params = {};
+      }
+      messageBody.params.context = { jwtToken: token };
+      
+      // Handle the request
+      return await transport.handleRequest(req, res, messageBody);
+    }
+    
+    // Unsupported transport type
+    return res.status(400).json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: 'Unsupported transport type',
+      },
+      id: null,
+    });
   } catch (error) {
-    console.error('Error handling streamable HTTP request:', error);
+    console.error('Error handling MCP request:', error);
     if (!res.headersSent) {
       res.status(500).json({
         jsonrpc: '2.0',
         error: {
-          code: -32000,
+          code: -32603,
           message: 'Internal Server Error',
         },
         id: null,
@@ -126,7 +158,8 @@ app.post('/mcp', async (req, res) => {
   }
 });
 
-// Legacy SSE endpoint for older clients
+// Keep legacy SSE endpoints for backward compatibility
+// Legacy SSE endpoint
 app.get('/sse', async (req, res) => {
   try {
     // Get the auth context - extract JWT token
@@ -136,29 +169,29 @@ app.get('/sse', async (req, res) => {
       return res.status(401).send('Unauthorized');
     }
     
-    // Create SSE transport
-    const transport = new SSEServerTransport('/messages', res);
-    transports.sse[transport.sessionId] = transport;
+    // Create SSE transport and connect to server
+    const sseTransport = new SSEServerTransport('/messages', res);
+    
+    // Store transport for session management
+    sseTransports[sseTransport.sessionId] = sseTransport;
     
     // Clean up on connection close
     res.on('close', () => {
-      console.log(`Cleaning up SSE session ${transport.sessionId}`);
-      delete transports.sse[transport.sessionId];
+      console.log(`Cleaning up SSE session ${sseTransport.sessionId}`);
+      delete sseTransports[sseTransport.sessionId];
     });
     
-    // Store the token in a shared context map to access it when handling messages
-    sessionTokens.set(transport.sessionId, token);
-    
     // Connect transport to MCP server
-    await server.connect(transport);
+    await server.connect(sseTransport);
   } catch (error) {
-    console.error('Error handling SSE request:', error);
+    console.error('Error handling legacy SSE request:', error);
     if (!res.headersSent) {
       res.status(500).send('Internal Server Error');
     }
   }
 });
-// Legacy message endpoint for older clients
+
+// Legacy messages endpoint
 app.post('/messages', async (req, res) => {
   try {
     const sessionId = req.query.sessionId as string;
@@ -166,35 +199,30 @@ app.post('/messages', async (req, res) => {
       return res.status(400).send('No sessionId provided');
     }
     
-    const transport = transports.sse[sessionId];
-    if (!transport) {
-      return res.status(400).send('No transport found for sessionId');
-    }
-    
-    // Get token from Authorization header if available
+    // For legacy POST requests, always get token from authorization header
     const authHeader = req.headers.authorization;
-    let token = authHeader?.split(' ')[1];
-    
-    // If no token in header, try to get the stored token for this session
+    const token = authHeader?.split(' ')[1];
     if (!token) {
-      token = sessionTokens.get(sessionId);
-      if (!token) {
-        return res.status(401).send('Unauthorized: No valid token found');
-      }
-    } else {
-      // Update the stored token for this session
-      sessionTokens.set(sessionId, token);
+      return res.status(401).send('Unauthorized');
     }
     
     // Add token to the request context
     if (!req.body.params) {
       req.body.params = {};
     }
-    req.body.params.context = { token };
+    req.body.params.context = { jwtToken: token };
     
-    await transport.handlePostMessage(req, res, req.body);
+    // For legacy messages endpoint
+    const sseTransport = sseTransports[sessionId];
+    
+    if (!sseTransport) {
+      return res.status(400).send('No transport found for sessionId');
+    }
+    
+    // Handle the message using the transport
+    await sseTransport.handlePostMessage(req, res, req.body);
   } catch (error) {
-    console.error('Error handling message request:', error);
+    console.error('Error handling legacy message request:', error);
     if (!res.headersSent) {
       res.status(500).send('Internal Server Error');
     }
@@ -210,5 +238,6 @@ app.get('/health', (_, res) => {
 app.listen(PORT, () => {
   console.log(`AlexisHR MCP Server listening on port ${PORT}`);
   console.log(`Health check available at http://localhost:${PORT}/health`);
-  console.log(`MCP endpoints: /mcp (modern), /sse and /messages (legacy)`);
+  console.log(`MCP endpoint: /mcp?transportType=streamable-http (modern), /mcp?transportType=sse (SSE)`);
+  console.log(`Legacy endpoints: /sse and /messages also supported`);
 });
