@@ -39,8 +39,60 @@ export const registerLeaveTools = (server: McpServer) => {
         // Create API client with JWT token
         const apiClient = new AlexisApiClient(jwtToken);
         
-        // Make API call
-        const result = await apiClient.getAllLeaves(limit, filters as LeaveFilters);
+        // Extract date filters for local filtering
+        const startDateFilter = filters?.startDate;
+        const endDateFilter = filters?.endDate;
+        
+        // Create a new filters object without date filters for the API call
+        const apiFilters = { ...filters };
+        if (apiFilters) {
+          delete apiFilters.startDate;
+          delete apiFilters.endDate;
+        }
+        
+        // Make API call with filters excluding dates
+        const result = await apiClient.getAllLeaves(limit, apiFilters as LeaveFilters);
+        
+        // Apply local date filtering if date filters are provided
+        if (startDateFilter || endDateFilter) {
+          // Filter the leaves based on date criteria
+          result.leaves = result.leaves.filter(leave => {
+            const leaveStartDate = new Date(leave.startDate);
+            const leaveEndDate = new Date(leave.endDate);
+            
+            // If only startDateFilter is provided
+            if (startDateFilter && !endDateFilter) {
+              const filterStartDate = new Date(startDateFilter);
+              // Return leaves where either startDate or endDate is >= filterStartDate
+              return leaveStartDate >= filterStartDate || leaveEndDate >= filterStartDate;
+            }
+            
+            // If only endDateFilter is provided
+            if (endDateFilter && !startDateFilter) {
+              const filterEndDate = new Date(endDateFilter);
+              // Return leaves where either startDate or endDate is <= filterEndDate
+              return leaveStartDate <= filterEndDate || leaveEndDate <= filterEndDate;
+            }
+            
+            // If both date filters are provided
+            if (startDateFilter && endDateFilter) {
+              const filterStartDate = new Date(startDateFilter);
+              const filterEndDate = new Date(endDateFilter);
+              
+              // Return leaves where:
+              // 1. Either startDate or endDate is >= filterStartDate AND
+              // 2. Either startDate or endDate is <= filterEndDate
+              return (leaveStartDate >= filterStartDate || leaveEndDate >= filterStartDate) && 
+                     (leaveStartDate <= filterEndDate || leaveEndDate <= filterEndDate);
+            }
+            
+            return true;
+          });
+          
+          // Update the count in metadata
+          result.metadata.count = result.leaves.length;
+          result.metadata.appliedFilters = filters || {};
+        }
         
         return {
           content: [{ 

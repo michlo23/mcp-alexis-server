@@ -12,7 +12,7 @@ export class AlexisApiClient {
   }
 
   
-  
+
   /**
    * Builds filter parameters for AlexisHR API
    * @param filters Object containing filter criteria
@@ -191,7 +191,8 @@ export class AlexisApiClient {
           params: {
             limit,
             offset,
-            select: "id,employeeId,typeId,status,duration,startDate,endDate,gradePercentage",
+           // select: "id,employeeId,typeId,status,duration,startDate,endDate,gradePercentage",
+            relations:"type,employee",
             ...filterParams,
           },
         });
