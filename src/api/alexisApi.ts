@@ -102,6 +102,43 @@ export class AlexisApiClient {
   }
 
   /**
+   * Update an employee's information
+   * @param employeeId ID of the employee to update
+   * @param data Object containing fields to update (only title, departmentId, division, organization allowed)
+   */
+  async updateEmployee(employeeId: string, data: {
+    title?: string;
+    departmentId?: string;
+    division?: string;
+    organization?: string;
+  }) {
+    // Ensure only allowed fields are included
+    const allowedFields = ['title', 'departmentId', 'division', 'organization'];
+    const updateData: Record<string, any> = {};
+    
+    // Only include allowed fields that are present in the input data
+    Object.keys(data).forEach(key => {
+      if (allowedFields.includes(key) && data[key as keyof typeof data] !== undefined) {
+        updateData[key] = data[key as keyof typeof data];
+      }
+    });
+    
+    try {
+      const response = await axios.patch(`${ALEXIS_EMPLOYEE_API_URL}/${employeeId}`, updateData, {
+        headers: {
+          'Authorization': `${this.jwtToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error(`Error updating employee ${employeeId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Get all departments with optional filtering and pagination
    */
   async getAllDepartments(limit: number = 500, filters?: Record<string, any>) {
@@ -229,7 +266,8 @@ export class AlexisApiClient {
           Authorization: `${this.jwtToken}`,
         },
         params: {
-          select: "id,employeeId,typeId,status,duration,startDate,endDate,gradePercentage"
+              // select: "id,employeeId,typeId,status,duration,startDate,endDate,gradePercentage",
+              relations:"type,employee",
         }
       });
 

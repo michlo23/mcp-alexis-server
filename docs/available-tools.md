@@ -76,6 +76,41 @@ Fetches a specific employee by their unique ID.
 }
 ```
 
+#### `updateEmployee`
+
+Updates specific fields of an employee in the AlexisHR system.
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `employeeId` | string | Yes | - | The unique identifier of the employee |
+| `data` | object | Yes | - | Object containing fields to update |
+
+**Updatable Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `title` | string | Employee's job title |
+| `departmentId` | string | ID of the employee's department |
+| `division` | string | Employee's division |
+| `organization` | string | Employee's organization |
+
+**Example Usage:**
+
+```json
+{
+  "name": "updateEmployee",
+  "input": {
+    "employeeId": "12345",
+    "data": {
+      "title": "Senior Developer",
+      "division": "Engineering"
+    }
+  }
+}
+```
+
 ### Department Tools
 
 #### `getAllDepartments`
@@ -154,10 +189,16 @@ Fetches all leaves from AlexisHR API with optional filtering.
 | `employeeId` | string | Filter by employee ID |
 | `typeId` | string | Filter by leave type ID |
 | `status` | string | Filter by leave status |
-| `startDate` | string | Filter by leave start date |
-| `endDate` | string | Filter by leave end date |
+| `startDate` | string | Filter leaves where either startDate or endDate is >= this date (filtered locally) |
+| `endDate` | string | Filter leaves where either startDate or endDate is <= this date (filtered locally) |
 | `duration` | string | Filter by leave duration |
 | `gradePercentage` | string | Filter by leave grade percentage |
+
+**Note on Date Filtering:**
+
+The `startDate` and `endDate` filters are applied locally after fetching leaves from the API. When both filters are provided, leaves are returned where:
+1. Either the leave's startDate or endDate is greater than or equal to the filter's startDate, AND
+2. Either the leave's startDate or endDate is less than or equal to the filter's endDate
 
 **Example Usage:**
 

@@ -6,6 +6,8 @@
 # Test Streamable HTTP Transport
 echo "Testing Streamable HTTP transport (modern)"
 
+JWT_TOKEN="provide token here"
+
 # Initialize session
 SESSION_RESPONSE=$(curl -s -X POST http://localhost:3000/mcp \
   -H "Content-Type: application/json" \

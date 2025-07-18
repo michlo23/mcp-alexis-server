@@ -2,7 +2,7 @@
 
 # This is a sample JWT token for testing
 # In production, replace with your actual JWT token
-JWT_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlRlc3QgVXNlciIsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+JWT_TOKEN="provide token here"
 
 # Test SSE Transport
 echo "Testing legacy SSE transport"

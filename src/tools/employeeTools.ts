@@ -117,4 +117,57 @@ export const registerEmployeeTools = (server: McpServer) => {
       }
     }
   );
+
+  /**
+   * updateEmployee tool - Updates specific fields of an employee
+   */
+  server.registerTool(
+    'updateEmployee',
+    {
+      title: 'Update Employee',
+      description: 'Updates specific fields of an employee in the AlexisHR system.',
+      inputSchema: {
+        employeeId: z.string(),
+        data: z.object({
+          title: z.string().optional(),
+          departmentId: z.string().optional(),
+          division: z.string().optional(),
+          organization: z.string().optional()
+        })
+      }
+    },
+    async ({ employeeId, data }, context: any) => {
+      try {
+        // Get JWT token from request
+        const jwtToken = context.requestInfo.headers.authorization;
+        if (!jwtToken) {
+          throw new Error('Authentication required');
+        }
+
+        // Create API client with JWT token
+        const apiClient = new AlexisApiClient(jwtToken);
+        
+        // Make API call to update employee
+        const result = await apiClient.updateEmployee(employeeId, data);
+        
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify(result, null, 2)
+          }]
+        };
+      } catch (error: any) {
+        console.error(`Error in updateEmployee tool (ID: ${employeeId}):`, error);
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({ 
+              error: true, 
+              message: error.message || `Failed to update employee with ID ${employeeId}` 
+            }, null, 2)
+          }]
+        };
+      }
+    }
+  );
 };
