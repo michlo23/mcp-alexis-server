@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL } from '../config';
+import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL, ALEXIS_OFFICE_API_URL } from '../config';
 
 /**
  * Base API client for AlexisHR
@@ -274,6 +274,96 @@ export class AlexisApiClient {
       return response.data;
     } catch (error) {
       console.error(`Error fetching leave ${leaveId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get all offices with optional filtering, sorting and pagination
+   * @param limit Maximum number of offices to return per request
+   * @param filters Optional filters for querying offices
+   * @param select Optional fields to select
+   * @param offset Offset for pagination
+   * @param sort Optional sort parameter
+   */
+  async getAllOffices({
+    limit = 500,
+    filters,
+    select = "id,name,location,address,city,country,postalCode",
+    offset = 0,
+    sort
+  }: {
+    limit?: number;
+    filters?: Record<string, any>;
+    select?: string;
+    offset?: number;
+    sort?: string;
+  } = {}) {
+    const offices = [];
+    let total = 0;
+    let currentOffset = offset;
+    
+    // Build filter parameters
+    const filterParams = this.buildFilterParams(filters);
+    
+    try {
+      // Handle pagination by making multiple requests if needed
+      do {
+        const response = await axios.get(ALEXIS_OFFICE_API_URL, {
+          headers: {
+            Authorization: `${this.jwtToken}`,
+          },
+          params: {
+            limit,
+            offset: currentOffset,
+            select,
+            sort,
+            ...filterParams,
+          },
+        });
+
+        const batch = response.data.data || [];
+        total = response.data.total || 0;
+        offices.push(...batch);
+
+        currentOffset += limit;
+      } while (currentOffset < total);
+
+      return {
+        offices,
+        metadata: {
+          count: offices.length,
+          totalAvailable: total,
+          limit,
+          offset,
+          appliedFilters: filters || {}
+        }
+      };
+    } catch (error) {
+      console.error('Error fetching offices:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get office by ID
+   * @param officeId ID of the office to fetch
+   * @param select Optional fields to select
+   */
+  async getOfficeById(officeId: string, select = "id,name,location,address,city,country,postalCode") {
+    try {
+      const response = await axios.get(`${ALEXIS_OFFICE_API_URL}/${officeId}`, {
+        headers: {
+          Authorization: `${this.jwtToken}`,
+        },
+        params: {
+          select
+        }
+      });
+
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching office ${officeId}:`, error);
       throw error;
     }
   }

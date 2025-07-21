@@ -13,6 +13,7 @@ export const ALEXIS_API_BASE_URL = process.env.ALEXIS_API_BASE_URL || 'https://a
 export const ALEXIS_EMPLOYEE_API_URL = process.env.ALEXIS_EMPLOYEE_API_URL || 'https://api.alexishr.com/v1/employee';
 export const ALEXIS_DEPARTMENT_API_URL = process.env.ALEXIS_DEPARTMENT_API_URL || 'https://api.alexishr.com/v1/department';
 export const ALEXIS_LEAVE_API_URL = process.env.ALEXIS_LEAVE_API_URL || 'https://api.alexishr.com/v1/leave';
+export const ALEXIS_OFFICE_API_URL = process.env.ALEXIS_OFFICE_API_URL || 'https://api.alexishr.com/v1/office';
 
 // Logging
 export const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
