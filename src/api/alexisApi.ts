@@ -289,7 +289,7 @@ export class AlexisApiClient {
   async getAllOffices({
     limit = 500,
     filters,
-    select = "id,name,location,address,city,country,postalCode",
+   // select = "id,name,location,address,city,country,postalCode",
     offset = 0,
     sort
   }: {
@@ -316,7 +316,7 @@ export class AlexisApiClient {
           params: {
             limit,
             offset: currentOffset,
-            select,
+        //    select,
             sort,
             ...filterParams,
           },
@@ -356,9 +356,9 @@ export class AlexisApiClient {
         headers: {
           Authorization: `${this.jwtToken}`,
         },
-        params: {
-          select
-        }
+        // params: {
+        //   select
+        // }
       });
 
       return response.data;
