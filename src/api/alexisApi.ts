@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL, ALEXIS_OFFICE_API_URL } from '../config';
+import { Employee, Department, Office } from '../types/alexis';
 
 /**
  * Base API client for AlexisHR
@@ -30,6 +31,48 @@ export class AlexisApiClient {
     });
     
     return params;
+  }
+
+  /**
+   * Decorates employee responses with Department and Office names
+   * @param employees Array of employee objects or single employee object
+   * @returns Employees with added Department and Office name fields
+   */
+  async decorateEmployeeResponse(employees: Employee[] | Employee): Promise<
+    Array<Employee & { Department: string | null, Office: string | null }> | 
+    (Employee & { Department: string | null, Office: string | null })
+  > {
+    try {
+      // Fetch all departments and offices
+      const departmentsResponse = await this.getAllDepartments();
+      const officesResponse = await this.getAllOffices({});
+      
+      const departments: Department[] = departmentsResponse.departments;
+      const offices: Office[] = officesResponse.offices;
+      
+      // Create lookup maps for faster access by ID
+      const departmentMap = new Map(departments.map(dept => [dept.id, dept.name]));
+      const officeMap = new Map(offices.map(office => [office.id, office.name]));
+      
+      if (Array.isArray(employees)) {
+        // Handle array of employees
+        return employees.map(employee => ({
+          ...employee,
+          Department: employee.departmentId && departmentMap.get(employee.departmentId) || null,
+          Office: employee.officeId && officeMap.get(employee.officeId) || null
+        }));
+      } else {
+        // Handle single employee
+        return {
+          ...employees,
+          Department: employees.departmentId && departmentMap.get(employees.departmentId) || null,
+          Office: employees.officeId && officeMap.get(employees.officeId) || null
+        };
+      }
+    } catch (error) {
+      console.error('Error decorating employee response:', error);
+      throw error;
+    }
   }
 
   /**
@@ -65,10 +108,15 @@ export class AlexisApiClient {
         offset += limit;
       } while (offset < total);
 
+      // Decorate employees with Department and Office names
+      // const decoratedEmployees = await this.decorateEmployeeResponse(employees);
+
+      const decoratedEmployees = employees;
+
       return {
-        employees,
+        employees: decoratedEmployees,
         metadata: {
-          count: employees.length,
+          count: Array.isArray(decoratedEmployees) ? decoratedEmployees.length : 1,
           totalAvailable: total,
           limit,
           appliedFilters: filters || {}
@@ -94,7 +142,9 @@ export class AlexisApiClient {
         }
       });
 
-      return response.data;
+      // Decorate employee with Department and Office names
+      const decoratedEmployee = await this.decorateEmployeeResponse(response.data);
+      return decoratedEmployee;
     } catch (error) {
       console.error(`Error fetching employee ${employeeId}:`, error);
       throw error;
@@ -105,6 +155,7 @@ export class AlexisApiClient {
    * Update an employee's information
    * @param employeeId ID of the employee to update
    * @param data Object containing fields to update (only title, departmentId, division, organization allowed)
+   * @returns Updated employee data with Department and Office names
    */
   async updateEmployee(employeeId: string, data: {
     title?: string;
@@ -131,7 +182,9 @@ export class AlexisApiClient {
         }
       });
 
-      return response.data;
+      // Decorate the updated employee with Department and Office names
+      const decoratedEmployee = await this.decorateEmployeeResponse(response.data);
+      return decoratedEmployee;
     } catch (error) {
       console.error(`Error updating employee ${employeeId}:`, error);
       throw error;

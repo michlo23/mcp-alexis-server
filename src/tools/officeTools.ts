@@ -19,15 +19,9 @@ export const registerOfficeTools = (server: McpServer) => {
         limit: z.number().optional().default(500),
         offset: z.number().optional().default(0),
         select: z.string().optional().default("id,name,location,address,city,country,postalCode"),
-        sort: z.string().optional(),
-        filters: z.object({
-          name: z.string().optional(),
-          city: z.string().optional(),
-          country: z.string().optional(),
-        }).optional(),
       }
     },
-    async ({ limit, offset, select, sort, filters }, context: any) => {
+    async ({ limit, offset, select }, context: any) => {
       try {
         // Get JWT token from request
         const jwtToken = context.requestInfo.headers.authorization;
@@ -43,8 +37,6 @@ export const registerOfficeTools = (server: McpServer) => {
           limit,
           offset,
           select,
-          sort,
-          filters
         });
         
         return {

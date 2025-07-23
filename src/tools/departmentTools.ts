@@ -20,9 +20,6 @@ export const registerDepartmentTools = (server: McpServer) => {
         filters: z.object({
           name: z.string().optional(),
           companyId: z.string().optional(),
-          costCenterId: z.string().optional(),
-          effectiveCostCenterId: z.string().optional(),
-          parentId: z.string().optional(),
         }).optional(),
       }
     },

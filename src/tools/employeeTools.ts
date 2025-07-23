@@ -27,6 +27,8 @@ export const registerEmployeeTools = (server: McpServer) => {
           firstName: z.string().optional(),
           lastName: z.string().optional(),
           nationality: z.string().optional(),
+          departmentId: z.string().optional(),
+          officeId: z.string().optional(),
         }).optional(),
       }
     },

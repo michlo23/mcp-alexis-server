@@ -68,6 +68,28 @@ export interface DepartmentResponse {
   };
 }
 
+// Office types
+export interface Office {
+  id: string;
+  name: string;
+  location: string;
+  address: string;
+  city: string;
+  country: string;
+  postalCode: string;
+}
+
+export interface OfficeResponse {
+  offices: Office[];
+  metadata: {
+    count: number;
+    totalAvailable: number;
+    limit: number;
+    offset: number;
+    appliedFilters: Record<string, any>;
+  };
+}
+
 // Leave types
 export interface Leave {
   id: string;
