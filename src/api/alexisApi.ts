@@ -1,6 +1,37 @@
 import axios from 'axios';
 import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL, ALEXIS_OFFICE_API_URL } from '../config';
-import { Employee, Department, Office } from '../types/alexis';
+import { Employee, Department, Office, Leave } from '../types/alexis';
+
+// Extended interfaces to handle property differences between API responses
+interface ExtendedEmployee extends Partial<Employee> {
+  _id?: string;
+  id: string;
+  firstName: string;
+  lastName: string;
+  departmentId?: string;
+  officeId?: string;
+  managerEmployeeId?: string;
+  Department?: string | null;
+  Office?: string | null;
+  managerName?: string | null;
+}
+
+interface SimplifiedDepartment {
+  _id?: string;
+  id?: string;
+  name: string;
+  description?: string | null;
+}
+
+interface SimplifiedOffice {
+  _id?: string;
+  id?: string;
+  name: string;
+  country?: string | null;
+  visitingAddress?: {
+    country?: string | null;
+  };
+}
 
 /**
  * Base API client for AlexisHR
@@ -26,8 +57,21 @@ export class AlexisApiClient {
     
     // Convert filters object to AlexisHR API filter format
     // Example: { active: true } becomes { 'filters[active][$eq]': true }
+    // Special handling for startDate and endDate to use $gte and $lte with date adjustments
     Object.entries(filters).forEach(([key, value]) => {
-      params[`filters[${key}][$eq]`] = value;
+      if (key === 'startDate') {
+        // Subtract one week from startDate
+        const startDate = new Date(value);
+        startDate.setDate(startDate.getDate() - 7); // Subtract 7 days
+        params[`filters[${key}][$gte]`] = startDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+      } else if (key === 'endDate') {
+        // Add one week to endDate
+        const endDate = new Date(value);
+        endDate.setDate(endDate.getDate() + 7); // Add 7 days
+        params[`filters[${key}][$lte]`] = endDate.toISOString().split('T')[0]; // Format as YYYY-MM-DD
+      } else {
+        params[`filters[${key}][$eq]`] = value;
+      }
     });
     
     return params;
@@ -38,38 +82,62 @@ export class AlexisApiClient {
    * @param employees Array of employee objects or single employee object
    * @returns Employees with added Department and Office name fields
    */
-  async decorateEmployeeResponse(employees: Employee[] | Employee): Promise<
-    Array<Employee & { Department: string | null, Office: string | null }> | 
-    (Employee & { Department: string | null, Office: string | null })
+  /**
+   * Decorates employee responses with Department and Office names and manager name
+   * @param employees Array of employee objects or single employee object
+   * @param allEmployees Optional array of employees for manager name lookup
+   * @returns Employees with added Department, Office and managerName fields
+   */
+  async decorateEmployeeResponse(employees: ExtendedEmployee[] | ExtendedEmployee, allEmployees: ExtendedEmployee[] = []): Promise<
+    ExtendedEmployee[] | ExtendedEmployee
   > {
     try {
       // Fetch all departments and offices
       const departmentsResponse = await this.getAllDepartments();
       const officesResponse = await this.getAllOffices({});
       
-      const departments: Department[] = departmentsResponse.departments;
-      const offices: Office[] = officesResponse.offices;
+      const departments: SimplifiedDepartment[] = departmentsResponse.departments;
+      const offices: SimplifiedOffice[] = officesResponse.offices;
       
       // Create lookup maps for faster access by ID
-      const departmentMap = new Map(departments.map(dept => [dept.id, dept.name]));
-      const officeMap = new Map(offices.map(office => [office.id, office.name]));
+      const departmentMap = new Map(departments.map(dept => [dept._id || dept.id, dept.name]));
+      const officeMap = new Map(offices.map(office => [office._id || office.id, office.name]));
+      
+      // Create a map of employees for manager lookup
+      const employeeMap = new Map();
+      allEmployees.forEach(emp => {
+        employeeMap.set(emp.id, { 
+          firstName: emp.firstName, 
+          lastName: emp.lastName 
+        });
+      });
       
       if (Array.isArray(employees)) {
         // Handle array of employees
-        return employees.map(employee => ({
-          ...employee,
-          Department: employee.departmentId && departmentMap.get(employee.departmentId) || null,
-          Office: employee.officeId && officeMap.get(employee.officeId) || null
-        }));
+        return employees.map(employee => {
+          const manager = employee.managerEmployeeId ? employeeMap.get(employee.managerEmployeeId) : null;
+          const managerName = manager ? `${manager.firstName} ${manager.lastName}` : null;
+          
+          return {
+            ...employee,
+            Department: employee.departmentId && departmentMap.get(employee.departmentId) || null,
+            Office: employee.officeId && officeMap.get(employee.officeId) || null,
+            managerName
+          } as ExtendedEmployee;
+        });
       } else {
         // Handle single employee
+        const manager = employees.managerEmployeeId ? employeeMap.get(employees.managerEmployeeId) : null;
+        const managerName = manager ? `${manager.firstName} ${manager.lastName}` : null;
+        
         return {
           ...employees,
           Department: employees.departmentId && departmentMap.get(employees.departmentId) || null,
-          Office: employees.officeId && officeMap.get(employees.officeId) || null
-        };
+          Office: employees.officeId && officeMap.get(employees.officeId) || null,
+          managerName
+        } as ExtendedEmployee;
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error decorating employee response:', error);
       throw error;
     }
@@ -78,7 +146,21 @@ export class AlexisApiClient {
   /**
    * Get all employees with optional filtering and pagination
    */
-  async getAllEmployees(limit: number = 500, filters?: Record<string, any>) {
+  /**
+   * Get all employees with optional filtering and pagination
+   * @param limit Maximum number of employees to return per request
+   * @param filters Optional filters for querying employees
+   * @returns Object containing employees array and metadata
+   */
+  async getAllEmployees(limit: number = 500, filters?: Record<string, any>): Promise<{
+    employees: ExtendedEmployee[];
+    metadata: {
+      count: number;
+      totalAvailable: number;
+      limit: number;
+      appliedFilters: Record<string, any>;
+    };
+  }> {
     const employees = [];
     let offset = 0;
     let total = 0;
@@ -109,9 +191,7 @@ export class AlexisApiClient {
       } while (offset < total);
 
       // Decorate employees with Department and Office names
-      // const decoratedEmployees = await this.decorateEmployeeResponse(employees);
-
-      const decoratedEmployees = employees;
+      const decoratedEmployees = await this.decorateEmployeeResponse(employees) as ExtendedEmployee[];
 
       return {
         employees: decoratedEmployees,
@@ -131,7 +211,12 @@ export class AlexisApiClient {
   /**
    * Get employee by ID
    */
-  async getEmployeeById(employeeId: string) {
+  /**
+   * Get employee by ID
+   * @param employeeId ID of the employee to fetch
+   * @returns Employee object with Department and Office names
+   */
+  async getEmployeeById(employeeId: string): Promise<ExtendedEmployee> {
     try {
       const response = await axios.get(`${ALEXIS_EMPLOYEE_API_URL}/${employeeId}`, {
         headers: {
@@ -143,7 +228,7 @@ export class AlexisApiClient {
       });
 
       // Decorate employee with Department and Office names
-      const decoratedEmployee = await this.decorateEmployeeResponse(response.data);
+      const decoratedEmployee = await this.decorateEmployeeResponse(response.data) as ExtendedEmployee;
       return decoratedEmployee;
     } catch (error) {
       console.error(`Error fetching employee ${employeeId}:`, error);
@@ -155,6 +240,12 @@ export class AlexisApiClient {
    * Update an employee's information
    * @param employeeId ID of the employee to update
    * @param data Object containing fields to update (only title, departmentId, division, organization allowed)
+   * @returns Updated employee data with Department and Office names
+   */
+  /**
+   * Update an employee's information
+   * @param employeeId ID of the employee to update
+   * @param data Object containing fields to update
    * @returns Updated employee data with Department and Office names
    */
   async updateEmployee(employeeId: string, data: {
@@ -183,7 +274,7 @@ export class AlexisApiClient {
       });
 
       // Decorate the updated employee with Department and Office names
-      const decoratedEmployee = await this.decorateEmployeeResponse(response.data);
+      const decoratedEmployee = await this.decorateEmployeeResponse(response.data) as ExtendedEmployee;
       return decoratedEmployee;
     } catch (error) {
       console.error(`Error updating employee ${employeeId}:`, error);
@@ -194,7 +285,22 @@ export class AlexisApiClient {
   /**
    * Get all departments with optional filtering and pagination
    */
-  async getAllDepartments(limit: number = 500, filters?: Record<string, any>) {
+  /**
+   * Get all departments with optional filtering and pagination
+   * @param limit Maximum number of departments to return per request
+   * @param filters Optional filters for querying departments
+   * @param simplified Whether to return simplified department data (default: true)
+   * @returns Object containing departments array and metadata
+   */
+  async getAllDepartments(limit: number = 500, filters?: Record<string, any>, simplified: boolean = true): Promise<{
+    departments: SimplifiedDepartment[];
+    metadata: {
+      count: number;
+      totalAvailable: number;
+      limit: number;
+      appliedFilters: Record<string, any>;
+    };
+  }> {
     const departments = [];
     let offset = 0;
     let total = 0;
@@ -212,7 +318,6 @@ export class AlexisApiClient {
           params: {
             limit,
             offset,
-            select: "id,companyId,name,costCenterId,effectiveCostCenterId,parentId",
             ...filterParams,
           },
         });
@@ -224,10 +329,18 @@ export class AlexisApiClient {
         offset += limit;
       } while (offset < total);
 
+      // Transform departments to simplified format if requested
+      const transformedDepartments = simplified ? departments.map(dept => ({
+        _id: dept._id,
+        id: dept.id,
+        name: dept.name,
+        description: dept.description || null
+      } as SimplifiedDepartment)) : departments;
+
       return {
-        departments,
+        departments: transformedDepartments,
         metadata: {
-          count: departments.length,
+          count: transformedDepartments.length,
           totalAvailable: total,
           limit,
           appliedFilters: filters || {}
@@ -242,17 +355,30 @@ export class AlexisApiClient {
   /**
    * Get department by ID
    */
-  async getDepartmentById(departmentId: string) {
+  /**
+   * Get department by ID
+   * @param departmentId ID of the department to fetch
+   * @param simplified Whether to return simplified department data (default: true)
+   * @returns Department object
+   */
+  async getDepartmentById(departmentId: string, simplified: boolean = true): Promise<SimplifiedDepartment> {
     try {
       const response = await axios.get(`${ALEXIS_DEPARTMENT_API_URL}/${departmentId}`, {
         headers: {
           Authorization: `${this.jwtToken}`,
-        },
-        params: {
-          select: "id,companyId,name,costCenterId,effectiveCostCenterId,parentId"
         }
       });
 
+      // Return simplified department data if requested
+      if (simplified && response.data) {
+        return {
+          _id: response.data._id,
+          id: response.data.id,
+          name: response.data.name,
+          description: response.data.description || null
+        } as SimplifiedDepartment;
+      }
+      
       return response.data;
     } catch (error) {
       console.error(`Error fetching department ${departmentId}:`, error);
@@ -263,7 +389,21 @@ export class AlexisApiClient {
   /**
    * Get all leaves with optional filtering and pagination
    */
-  async getAllLeaves(limit: number = 500, filters?: Record<string, any>) {
+  /**
+   * Get all leaves with optional filtering and pagination
+   * @param limit Maximum number of leaves to return per request
+   * @param filters Optional filters for querying leaves
+   * @returns Object containing leaves array and metadata
+   */
+  async getAllLeaves(limit: number = 500, filters?: Record<string, any>): Promise<{
+    leaves: Leave[];
+    metadata: {
+      count: number;
+      totalAvailable: number;
+      limit: number;
+      appliedFilters: Record<string, any>;
+    };
+  }> {
     const leaves = [];
     let offset = 0;
     let total = 0;
@@ -281,8 +421,7 @@ export class AlexisApiClient {
           params: {
             limit,
             offset,
-           // select: "id,employeeId,typeId,status,duration,startDate,endDate,gradePercentage",
-            relations:"type,employee",
+            select: "startDate,endDate,employeeId,status,typeId",
             ...filterParams,
           },
         });
@@ -312,15 +451,19 @@ export class AlexisApiClient {
   /**
    * Get leave by ID
    */
-  async getLeaveById(leaveId: string) {
+  /**
+   * Get leave by ID
+   * @param leaveId ID of the leave to fetch
+   * @returns Leave object
+   */
+  async getLeaveById(leaveId: string): Promise<Leave> {
     try {
       const response = await axios.get(`${ALEXIS_LEAVE_API_URL}/${leaveId}`, {
         headers: {
           Authorization: `${this.jwtToken}`,
         },
         params: {
-              // select: "id,employeeId,typeId,status,duration,startDate,endDate,gradePercentage",
-              relations:"type,employee",
+             select: "startDate,endDate,employeeId,status,typeId",
         }
       });
 
@@ -339,19 +482,34 @@ export class AlexisApiClient {
    * @param offset Offset for pagination
    * @param sort Optional sort parameter
    */
+  /**
+   * Get all offices with optional filtering, sorting and pagination
+   * @param options Object containing parameters
+   * @returns Object containing offices array and metadata
+   */
   async getAllOffices({
     limit = 500,
     filters,
-   // select = "id,name,location,address,city,country,postalCode",
     offset = 0,
-    sort
+    sort,
+    simplified = true
   }: {
     limit?: number;
     filters?: Record<string, any>;
     select?: string;
     offset?: number;
     sort?: string;
-  } = {}) {
+    simplified?: boolean;
+  } = {}): Promise<{
+    offices: SimplifiedOffice[];
+    metadata: {
+      count: number;
+      totalAvailable: number;
+      limit: number;
+      offset: number;
+      appliedFilters: Record<string, any>;
+    };
+  }> {
     const offices = [];
     let total = 0;
     let currentOffset = offset;
@@ -369,7 +527,6 @@ export class AlexisApiClient {
           params: {
             limit,
             offset: currentOffset,
-        //    select,
             sort,
             ...filterParams,
           },
@@ -381,11 +538,19 @@ export class AlexisApiClient {
 
         currentOffset += limit;
       } while (currentOffset < total);
+      
+      // Transform offices to simplified format if requested
+      const transformedOffices = simplified ? offices.map(office => ({
+        _id: office._id,
+        id: office.id,
+        name: office.name,
+        country: office.visitingAddress?.country || null
+      } as SimplifiedOffice)) : offices;
 
       return {
-        offices,
+        offices: transformedOffices,
         metadata: {
-          count: offices.length,
+          count: transformedOffices.length,
           totalAvailable: total,
           limit,
           offset,
@@ -403,16 +568,30 @@ export class AlexisApiClient {
    * @param officeId ID of the office to fetch
    * @param select Optional fields to select
    */
-  async getOfficeById(officeId: string, select = "id,name,location,address,city,country,postalCode") {
+  /**
+   * Get office by ID
+   * @param officeId ID of the office to fetch
+   * @param select Optional fields to select
+   * @param simplified Whether to return simplified office data (default: true)
+   * @returns Office object
+   */
+  async getOfficeById(officeId: string, select = "id,name,location,address,city,country,postalCode", simplified = true): Promise<SimplifiedOffice> {
     try {
       const response = await axios.get(`${ALEXIS_OFFICE_API_URL}/${officeId}`, {
         headers: {
           Authorization: `${this.jwtToken}`,
         },
-        // params: {
-        //   select
-        // }
       });
+      
+
+      if (simplified && response.data) {
+        return {
+          _id: response.data._id,
+          id: response.data.id,
+          name: response.data.name,
+          country: response.data.visitingAddress?.country || null
+        } as SimplifiedOffice;
+      }
 
       return response.data;
     } catch (error) {

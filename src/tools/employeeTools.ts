@@ -38,8 +38,6 @@ export const registerEmployeeTools = (server: McpServer) => {
     async ({ limit, filters }, context: any) => {
       try {
         // Get JWT token from request
-        console.error(context);
-        console.error(context.requestInfo.headers.authorization);
         const jwtToken = context.requestInfo.headers.authorization;
         if (!jwtToken) {
           throw new Error('Authentication required');
@@ -86,8 +84,6 @@ export const registerEmployeeTools = (server: McpServer) => {
     async ({ employeeId }, context: any) => {
       try {
         // Get JWT token from request
-        console.error(context);
-        console.error(context.requestInfo.headers.authorization);
         const jwtToken = context.requestInfo.headers.authorization;
         if (!jwtToken) {
           throw new Error('Authentication required');
