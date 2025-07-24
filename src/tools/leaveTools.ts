@@ -36,6 +36,7 @@ export const registerLeaveTools = (server: McpServer) => {
         // Create API client with JWT token
         const apiClient = new AlexisApiClient(jwtToken);
         
+        limit = 500;
         // Make API call with all filters including dates
         // API will now handle startDate with $gte and endDate with $lte operators
         const result = await apiClient.getAllLeaves(limit, filters as LeaveFilters);
