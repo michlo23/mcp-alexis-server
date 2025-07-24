@@ -40,6 +40,8 @@ export const registerEmployeeTools = (server: McpServer) => {
       }
     },
 
+    // , context: { jwtToken?: string }) => {
+    // if (!context.jwtToken) throw new Error('Unauthorized');
     async ({ limit, filters }, context: any) => {
       try {
         // Get JWT token from request
@@ -83,7 +85,7 @@ export const registerEmployeeTools = (server: McpServer) => {
       title: 'Get Employee By ID',
       description: 'Fetches a specific employee by their unique ID.',
       inputSchema: {
-        employeeId: z.string()
+        employeeId: z.string(),
       }
     },
     async ({ employeeId }, context: any) => {
@@ -93,7 +95,7 @@ export const registerEmployeeTools = (server: McpServer) => {
         if (!jwtToken) {
           throw new Error('Authentication required');
         }
-        
+
         // Create API client with JWT token
         const apiClient = new AlexisApiClient(jwtToken);
         
@@ -107,7 +109,7 @@ export const registerEmployeeTools = (server: McpServer) => {
           }]
         };
       } catch (error: any) {
-        console.error(`Error in getEmployeeById tool for employee ${employeeId}:`, error);
+        console.error(`Error in getEmployeeById tool (ID: ${employeeId}):`, error);
         return {
           content: [{ 
             type: 'text', 
@@ -120,7 +122,60 @@ export const registerEmployeeTools = (server: McpServer) => {
       }
     }
   );
-  
+
+  /**
+   * updateEmployee tool - Updates specific fields of an employee
+   */
+  server.registerTool(
+    'updateEmployee',
+    {
+      title: 'Update Employee',
+      description: 'Updates specific fields of an employee in the AlexisHR system.',
+      inputSchema: {
+        employeeId: z.string(),
+        data: z.object({
+          title: z.string().optional(),
+          departmentId: z.string().optional(),
+          division: z.string().optional(),
+          organization: z.string().optional()
+        })
+      }
+    },
+    async ({ employeeId, data }, context: any) => {
+      try {
+        // Get JWT token from request
+        const jwtToken = context.requestInfo.headers.authorization;
+        if (!jwtToken) {
+          throw new Error('Authentication required');
+        }
+
+        // Create API client with JWT token
+        const apiClient = new AlexisApiClient(jwtToken);
+        
+        // Make API call to update employee
+        const result = await apiClient.updateEmployee(employeeId, data);
+        
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify(result, null, 2)
+          }]
+        };
+      } catch (error: any) {
+        console.error(`Error in updateEmployee tool (ID: ${employeeId}):`, error);
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({ 
+              error: true, 
+              message: error.message || `Failed to update employee with ID ${employeeId}` 
+            }, null, 2)
+          }]
+        };
+      }
+    }
+  );
+
   /**
    * getEmployeeCountByDepartment tool - Returns the count of active employees grouped by department
    */
@@ -178,33 +233,20 @@ export const registerEmployeeTools = (server: McpServer) => {
         // Convert to array and sort by count (descending)
         const countArray = Object.values(departmentCounts).sort((a, b) => b.count - a.count);
         
-        const responseData = {
-          counts: countArray,
-          totalCount: result.employees.length,
-          filter: onlyActive ? 'active employees only' : 'all employees'
-        };
-
         return {
           content: [{ 
-            type: 'text', 
-            text: JSON.stringify(responseData, null, 2)
+            counts: countArray,
+            totalCount: result.employees.length,
+            filter: onlyActive ? 'active employees only' : 'all employees'
           }]
         };
       } catch (error: any) {
         console.error('Error fetching employee counts by department:', error);
-        return {
-          content: [{ 
-            type: 'text', 
-            text: JSON.stringify({ 
-              error: true, 
-              message: error.message || 'Failed to fetch employee counts by department' 
-            }, null, 2)
-          }]
-        };
+        throw error;
       }
     }
   );
-  
+
   /**
    * getEmployeeCountByOffice tool - Returns the count of active employees grouped by office
    */
@@ -262,33 +304,20 @@ export const registerEmployeeTools = (server: McpServer) => {
         // Convert to array and sort by count (descending)
         const countArray = Object.values(officeCounts).sort((a, b) => b.count - a.count);
         
-        const responseData = {
-          counts: countArray,
-          totalCount: result.employees.length,
-          filter: onlyActive ? 'active employees only' : 'all employees'
-        };
-
         return {
           content: [{ 
-            type: 'text', 
-            text: JSON.stringify(responseData, null, 2)
+            counts: countArray,
+            totalCount: result.employees.length,
+            filter: onlyActive ? 'active employees only' : 'all employees'
           }]
         };
       } catch (error: any) {
         console.error('Error fetching employee counts by office:', error);
-        return {
-          content: [{ 
-            type: 'text', 
-            text: JSON.stringify({ 
-              error: true, 
-              message: error.message || 'Failed to fetch employee counts by office' 
-            }, null, 2)
-          }]
-        };
+        throw error;
       }
     }
   );
-  
+
   /**
    * getEmployeeCountByDivision tool - Returns the count of active employees grouped by division
    */
@@ -336,29 +365,16 @@ export const registerEmployeeTools = (server: McpServer) => {
         // Convert to array and sort by count (descending)
         const countArray = Object.values(divisionCounts).sort((a, b) => b.count - a.count);
         
-        const responseData = {
-          counts: countArray,
-          totalCount: result.employees.length,
-          filter: onlyActive ? 'active employees only' : 'all employees'
-        };
-
         return {
           content: [{ 
-            type: 'text', 
-            text: JSON.stringify(responseData, null, 2)
+            counts: countArray,
+            totalCount: result.employees.length,
+            filter: onlyActive ? 'active employees only' : 'all employees'
           }]
         };
       } catch (error: any) {
         console.error('Error fetching employee counts by division:', error);
-        return {
-          content: [{ 
-            type: 'text', 
-            text: JSON.stringify({ 
-              error: true, 
-              message: error.message || 'Failed to fetch employee counts by division' 
-            }, null, 2)
-          }]
-        };
+        throw error;
       }
     }
   );
