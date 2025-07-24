@@ -1,5 +1,8 @@
 import axios from 'axios';
-import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL, ALEXIS_OFFICE_API_URL } from '../config';
+import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL, ALEXIS_OFFICE_API_URL, ALEXIS_API_BASE_URL } from '../config';
+
+// Define the leave-type API URL
+const ALEXIS_LEAVE_TYPE_API_URL = `${ALEXIS_API_BASE_URL}/leave-type`;
 import { Employee, Department, Office, Leave } from '../types/alexis';
 
 // Extended interfaces to handle property differences between API responses
@@ -31,6 +34,36 @@ interface SimplifiedOffice {
   visitingAddress?: {
     country?: string | null;
   };
+}
+
+interface LeaveType {
+  _id: string;
+  id: string;
+  name: string;
+}
+
+interface SimplifiedLeaveType {
+  _id?: string;
+  id?: string;
+  name: string;
+}
+
+interface ExtendedLeave extends Partial<Leave> {
+  _id?: string;
+  id?: string;
+  startDate: string;
+  endDate: string;
+  employeeId: string;
+  status: string;
+  typeId?: string;
+  employee?: {
+    firstName: string;
+    lastName: string;
+    fullName?: string;
+  } | null;
+  leaveType?: {
+    name: string;
+  } | null;
 }
 
 /**
@@ -395,8 +428,143 @@ export class AlexisApiClient {
    * @param filters Optional filters for querying leaves
    * @returns Object containing leaves array and metadata
    */
+  /**
+   * Get all leave types
+   * @param simplified Whether to return simplified leave type data (default: true)
+   * @returns Object containing leave types array and metadata
+   */
+  async getAllLeaveTypes(simplified: boolean = true): Promise<{
+    leaveTypes: SimplifiedLeaveType[];
+    metadata: {
+      count: number;
+    };
+  }> {
+    try {
+      const response = await axios.get(ALEXIS_LEAVE_TYPE_API_URL, {
+        headers: {
+          Authorization: `${this.jwtToken}`,
+        },params: {
+          select: "name"
+        },
+      });
+
+      const leaveTypes = response.data.data || [];
+      
+      // Transform leave types to simplified format if requested
+      const transformedLeaveTypes = simplified ? leaveTypes.map((type: any) => ({
+        _id: type._id,
+        id: type.id,
+        name: type.name,
+      } as SimplifiedLeaveType)) : leaveTypes;
+
+      return {
+        leaveTypes: transformedLeaveTypes,
+        metadata: {
+          count: transformedLeaveTypes.length,
+        }
+      };
+    } catch (error) {
+      console.error('Error fetching leave types:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get a specific leave type by ID
+   * @param typeId ID of the leave type to fetch
+   * @param simplified Whether to return simplified leave type data (default: true)
+   * @returns Leave type object
+   */
+  async getLeaveTypeById(typeId: string, simplified: boolean = true): Promise<SimplifiedLeaveType> {
+    try {
+      const response = await axios.get(`${ALEXIS_LEAVE_TYPE_API_URL}/${typeId}`, {
+        headers: {
+          Authorization: `${this.jwtToken}`,
+        },
+      });
+
+      if (simplified && response.data) {
+        return {
+          _id: response.data._id,
+          id: response.data.id,
+          name: response.data.name,
+        } as SimplifiedLeaveType;
+      }
+      
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching leave type ${typeId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Decorates leave responses with employee and leave type information
+   * @param leaves Array of leave objects or single leave object
+   * @returns Leaves with added employee and leave type information
+   */
+  async decorateLeaveResponse(leaves: ExtendedLeave[] | ExtendedLeave): Promise<
+    ExtendedLeave[] | ExtendedLeave
+  > {
+    try {
+      // Fetch all employees and leave types in parallel
+      const [employeesResponse, leaveTypesResponse] = await Promise.all([
+        this.getAllEmployees(),
+        this.getAllLeaveTypes()
+      ]);
+      
+      const employees: ExtendedEmployee[] = employeesResponse.employees;
+      const leaveTypes: SimplifiedLeaveType[] = leaveTypesResponse.leaveTypes;
+      
+      // Create a map of employees for faster lookup by ID
+      const employeeMap = new Map();
+      employees.forEach(emp => {
+        employeeMap.set(emp.id, {
+          firstName: emp.firstName,
+          lastName: emp.lastName,
+          fullName: `${emp.firstName} ${emp.lastName}`
+        });
+      });
+      
+      // Create a map of leave types for faster lookup by ID
+      const leaveTypeMap = new Map();
+      leaveTypes.forEach(type => {
+        leaveTypeMap.set(type.id, {
+          name: type.name
+        });
+      });
+      
+      if (Array.isArray(leaves)) {
+        // Handle array of leaves
+        return leaves.map(leave => {
+          const employeeInfo = leave.employeeId ? employeeMap.get(leave.employeeId) : null;
+          const leaveTypeInfo = leave.typeId ? leaveTypeMap.get(leave.typeId) : null;
+          
+          return {
+            ...leave,
+            employee: employeeInfo || null,
+            leaveType: leaveTypeInfo || null
+          } as ExtendedLeave;
+        });
+      } else {
+        // Handle single leave
+        const employeeInfo = leaves.employeeId ? employeeMap.get(leaves.employeeId) : null;
+        const leaveTypeInfo = leaves.typeId ? leaveTypeMap.get(leaves.typeId) : null;
+        
+        return {
+          ...leaves,
+          employee: employeeInfo || null,
+          leaveType: leaveTypeInfo || null
+        } as ExtendedLeave;
+      }
+    } catch (error: any) {
+      console.error('Error decorating leave response:', error);
+      throw error;
+    }
+  }
+
   async getAllLeaves(limit: number = 500, filters?: Record<string, any>): Promise<{
-    leaves: Leave[];
+    leaves: ExtendedLeave[];
     metadata: {
       count: number;
       totalAvailable: number;
@@ -433,10 +601,13 @@ export class AlexisApiClient {
         offset += limit;
       } while (offset < total);
 
+      // Decorate leaves with employee information
+      const decoratedLeaves = await this.decorateLeaveResponse(leaves) as ExtendedLeave[];
+      
       return {
-        leaves,
+        leaves: decoratedLeaves,
         metadata: {
-          count: leaves.length,
+          count: decoratedLeaves.length,
           totalAvailable: total,
           limit,
           appliedFilters: filters || {}
@@ -456,7 +627,7 @@ export class AlexisApiClient {
    * @param leaveId ID of the leave to fetch
    * @returns Leave object
    */
-  async getLeaveById(leaveId: string): Promise<Leave> {
+  async getLeaveById(leaveId: string): Promise<ExtendedLeave> {
     try {
       const response = await axios.get(`${ALEXIS_LEAVE_API_URL}/${leaveId}`, {
         headers: {
@@ -467,7 +638,9 @@ export class AlexisApiClient {
         }
       });
 
-      return response.data;
+      // Decorate leave with employee information
+      const decoratedLeave = await this.decorateLeaveResponse(response.data) as ExtendedLeave;
+      return decoratedLeave;
     } catch (error) {
       console.error(`Error fetching leave ${leaveId}:`, error);
       throw error;
