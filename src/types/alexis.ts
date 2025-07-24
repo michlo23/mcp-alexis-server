@@ -17,6 +17,9 @@ export interface Employee {
   nationality: string;
   departmentId: string;
   officeId: string;
+  gender?: string;
+  birthDate?: string;
+  age?: string | number;
 }
 
 export interface EmployeeFilters {

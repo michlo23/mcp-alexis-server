@@ -3,12 +3,14 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AlexisApiClient } from '../api/alexisApi';
 import { EmployeeFilters } from '../types/alexis';
 import { Request } from 'express';
+import { calculateDemographicCounts, DemographicCounts } from '../utils/countUtils';
 
 // Helper type for count results
 interface CountResult {
   id: string;
   name: string;
   count: number;
+  demographics?: DemographicCounts;
 }
 
 /**
@@ -161,6 +163,7 @@ export const registerEmployeeTools = (server: McpServer) => {
         
         // Group employees by department
         const departmentCounts: Record<string, CountResult> = {};
+        const departmentEmployees: Record<string, Array<any>> = {};
         
         result.employees.forEach(employee => {
           if (employee.departmentId) {
@@ -170,9 +173,16 @@ export const registerEmployeeTools = (server: McpServer) => {
                 name: departmentMap.get(employee.departmentId) || 'Unknown Department',
                 count: 0
               };
+              departmentEmployees[employee.departmentId] = [];
             }
             departmentCounts[employee.departmentId].count++;
+            departmentEmployees[employee.departmentId].push(employee);
           }
+        });
+        
+        // Calculate demographic sub-counts for each department
+        Object.keys(departmentCounts).forEach(deptId => {
+          departmentCounts[deptId].demographics = calculateDemographicCounts(departmentEmployees[deptId]);
         });
         
         // Convert to array and sort by count (descending)
@@ -245,6 +255,7 @@ export const registerEmployeeTools = (server: McpServer) => {
         
         // Group employees by office
         const officeCounts: Record<string, CountResult> = {};
+        const officeEmployees: Record<string, Array<any>> = {};
         
         result.employees.forEach(employee => {
           if (employee.officeId) {
@@ -254,9 +265,16 @@ export const registerEmployeeTools = (server: McpServer) => {
                 name: officeMap.get(employee.officeId) || 'Unknown Office',
                 count: 0
               };
+              officeEmployees[employee.officeId] = [];
             }
             officeCounts[employee.officeId].count++;
+            officeEmployees[employee.officeId].push(employee);
           }
+        });
+        
+        // Calculate demographic sub-counts for each office
+        Object.keys(officeCounts).forEach(officeId => {
+          officeCounts[officeId].demographics = calculateDemographicCounts(officeEmployees[officeId]);
         });
         
         // Convert to array and sort by count (descending)
@@ -290,6 +308,60 @@ export const registerEmployeeTools = (server: McpServer) => {
   );
   
   /**
+   * updateEmployee tool - Updates specific fields of an employee
+   */
+  server.registerTool(
+    'updateEmployee',
+    {
+      title: 'Update Employee',
+      description: 'Updates specific fields of an employee in the AlexisHR system.',
+      inputSchema: {
+        employeeId: z.string(),
+        data: z.object({
+          title: z.string().optional(),
+          departmentId: z.string().optional(),
+          division: z.string().optional(),
+          organization: z.string().optional()
+        })
+      }
+    },
+    async ({ employeeId, data }, context: any) => {
+      try {
+        // Get JWT token from request
+        const jwtToken = context.requestInfo.headers.authorization;
+        if (!jwtToken) {
+          throw new Error('Authentication required');
+        }
+
+        // Create API client with JWT token
+        const apiClient = new AlexisApiClient(jwtToken);
+        
+        // Make API call to update employee
+        const result = await apiClient.updateEmployee(employeeId, data);
+        
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify(result, null, 2)
+          }]
+        };
+      } catch (error: any) {
+        console.error(`Error in updateEmployee tool (ID: ${employeeId}):`, error);
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({ 
+              error: true, 
+              message: error.message || `Failed to update employee with ID ${employeeId}` 
+            }, null, 2)
+          }]
+        };
+      }
+    }
+  );
+
+
+  /**
    * getEmployeeCountByDivision tool - Returns the count of active employees grouped by division
    */
   server.registerTool(
@@ -319,6 +391,7 @@ export const registerEmployeeTools = (server: McpServer) => {
         
         // Group employees by division
         const divisionCounts: Record<string, CountResult> = {};
+        const divisionEmployees: Record<string, Array<any>> = {};
         
         result.employees.forEach(employee => {
           const division = employee.division || 'Unassigned';
@@ -329,8 +402,15 @@ export const registerEmployeeTools = (server: McpServer) => {
               name: division,
               count: 0
             };
+            divisionEmployees[division] = [];
           }
           divisionCounts[division].count++;
+          divisionEmployees[division].push(employee);
+        });
+        
+        // Calculate demographic sub-counts for each division
+        Object.keys(divisionCounts).forEach(division => {
+          divisionCounts[division].demographics = calculateDemographicCounts(divisionEmployees[division]);
         });
         
         // Convert to array and sort by count (descending)
@@ -363,3 +443,5 @@ export const registerEmployeeTools = (server: McpServer) => {
     }
   );
 };
+
+

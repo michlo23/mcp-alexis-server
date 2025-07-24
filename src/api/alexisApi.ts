@@ -211,7 +211,7 @@ export class AlexisApiClient {
           params: {
             limit,
             offset,
-            select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId",
+            select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId,birthDate,gender,age",
             ...filterParams,
           },
         });
@@ -256,7 +256,7 @@ export class AlexisApiClient {
           Authorization: `${this.jwtToken}`,
         },
         params: {
-          select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId"
+          select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId,birthDate,gender,age",
         }
       });
 
