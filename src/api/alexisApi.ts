@@ -293,9 +293,10 @@ export class AlexisApiClient {
     departmentId?: string;
     division?: string;
     organization?: string;
+    managerEmployeeId?: string;
   }) {
     // Ensure only allowed fields are included
-    const allowedFields = ['title', 'departmentId', 'division', 'organization'];
+    const allowedFields = ['title', 'departmentId', 'division', 'organization', 'managerEmployeeId'];
     const updateData: Record<string, any> = {};
     
     // Only include allowed fields that are present in the input data
@@ -877,7 +878,6 @@ export class AlexisApiClient {
       }
 
       const allOffboardings = result.offboardingList.data;
-      console.log(`[DEBUG] Got ${allOffboardings.length} total offboarding records`);
       
       // Deduplicate records by employeeId, keeping only the newest record by created date
       const employeeMap = new Map();
@@ -897,7 +897,6 @@ export class AlexisApiClient {
       
       // Get unique records (newest per employee)
       const uniqueOffboardings = Array.from(employeeMap.values());
-      console.log(`[DEBUG] After deduplication: ${uniqueOffboardings.length} unique offboarding records (removed ${allOffboardings.length - uniqueOffboardings.length} duplicates)`);
       
       return uniqueOffboardings;
     } catch (error) {
@@ -915,18 +914,15 @@ export class AlexisApiClient {
     try {
       // Get raw offboarding data
       const offboardings = await this.getOffboardingList();
-      console.log(`[DEBUG] Got ${offboardings.length} offboardings from GraphQL`); 
       
       // Get all employees for joining
       const { employees } = await this.getAllEmployees(1000, { active: false });
-      console.log(`[DEBUG] Got ${employees.length} inactive employees for joining`);
       
       // Join employee details with offboarding data
       let result = offboardings.map(offboarding => {
         const employee = employees.find(e => e.id === offboarding.employeeId);
         
         if (!employee) {
-          console.log(`[DEBUG] No employee found for offboarding with employeeId ${offboarding.employeeId}`);
           return null;
         }
         
@@ -942,26 +938,19 @@ export class AlexisApiClient {
             division: employee.division,
             department: employee.Department,
             office: employee.Office,
-            endDate: employee.endDate || offboarding.endDate // Use offboarding endDate as fallback
           }
         };
       }).filter(item => item !== null) as Offboarding[];
       
-      console.log(`[DEBUG] After joining, got ${result.length} valid offboardings`);
-      
       // Apply filters if any
       if (filters) {
-        console.log(`[DEBUG] Applying filters:`, filters);
         
         // Date range filters
-        console.log(`[DEBUG] startDate: ${filters.startDate}`);
-        console.log(`[DEBUG] endDate: ${filters.endDate}`);
         if (filters.startDate) {
           const beforeCount = result.length;
           result = result.filter(item => 
             new Date(item.offboardDate) >= new Date(filters.startDate)
           );
-          console.log(`[DEBUG] After startDate filter: ${result.length} offboardings (filtered out ${beforeCount - result.length})`);
         }
         
         if (filters.endDate) {
@@ -969,7 +958,6 @@ export class AlexisApiClient {
           result = result.filter(item => 
             new Date(item.offboardDate) <= new Date(filters.endDate)
           );
-          console.log(`[DEBUG] After endDate filter: ${result.length} offboardings (filtered out ${beforeCount - result.length})`);
         }
         
         // Voluntary/involuntary filter
@@ -978,11 +966,9 @@ export class AlexisApiClient {
           result = result.filter(item =>
             item.offboardInvoluntary === filters.offboardInvoluntary
           );
-          console.log(`[DEBUG] After offboardInvoluntary filter: ${result.length} offboardings (filtered out ${beforeCount - result.length})`);
         }
       }
       
-      console.log(`[DEBUG] Final result: ${result.length} offboardings`);
       return result;
     } catch (error) {
       console.error('Error fetching offboardings:', error);
@@ -1006,6 +992,9 @@ export class AlexisApiClient {
       totalOffboarded: number;
       voluntaryOffboarded: number;
       involuntaryOffboarded: number;
+      totalEnded: number;
+      voluntaryEnded: number;
+      involuntaryEnded: number;
     };
     monthlyMetrics: Array<{
       month: string;
@@ -1013,12 +1002,15 @@ export class AlexisApiClient {
       totalOffboarded: number;
       voluntaryOffboarded: number;
       involuntaryOffboarded: number;
+      totalEnded: number;
+      voluntaryEnded: number;
+      involuntaryEnded: number;
       turnoverRate: number;
+      endedRate: number;
     }>;
   }> {
     try {
       // Default period: last 12 months
-      console.log(`[DEBUG] calculateTurnover called with startDate: ${startDate}, endDate: ${endDate}`);
       const today = new Date();
       const end = endDate ? new Date(endDate) : today;
       const start = startDate ? new Date(startDate) : new Date(new Date().setFullYear(today.getFullYear() - 1));
@@ -1028,18 +1020,23 @@ export class AlexisApiClient {
       const endFormatted = end.toISOString().split('T')[0];
       
       // Get all employees including inactive to calculate correct headcount
-      console.log(`[DEBUG] Getting all employees (including inactive) for headcount calculation`);
       const allEmployeesResponse = await this.getAllEmployees(10000, {});
       const allEmployees = allEmployeesResponse.employees;
       
-      console.log(`[DEBUG] Getting offboardings for period ${startFormatted} to ${endFormatted}`);
       // Get offboardings for the period
       const offboardings = await this.getOffboardings({
         startDate: startFormatted,
         endDate: endFormatted
       });
       
-      console.log(`[DEBUG] Got ${offboardings.length} offboardings in the period`);
+      // Create a map of employeeId to offboarding record for easy lookup
+      const offboardingMap = new Map();
+      offboardings.forEach(o => {
+        if (o.employeeId) {
+          offboardingMap.set(o.employeeId, o);
+        }
+      });
+      
       
       // Calculate month range
       const months: string[] = [];
@@ -1048,8 +1045,6 @@ export class AlexisApiClient {
         months.push(currentDate.toISOString().substring(0, 7)); // YYYY-MM format
         currentDate.setMonth(currentDate.getMonth() + 1);
       }
-      
-      console.log(`[DEBUG] Analyzing ${months.length} months: ${months.join(', ')}`);
       
       // Calculate metrics for each month
       const monthlyMetrics = [];
@@ -1075,14 +1070,30 @@ export class AlexisApiClient {
                  offboardDate <= monthEnd;
         });
         
+        // Count ended employees (by endDate from offboarding records) during this month
+        const monthEnded = offboardings.filter(o => {
+          if (!o.endDate) return false;
+          const endDate = new Date(o.endDate);
+          return endDate >= monthStart && endDate <= monthEnd;
+        });
+        
+        // Track voluntary vs involuntary ended employees
+        const monthVoluntaryEnded = monthEnded.filter(o => !o.offboardInvoluntary);
+        const monthInvoluntaryEnded = monthEnded.filter(o => o.offboardInvoluntary);
+        
         const monthTotalOffboarded = monthOffboardings.length;
         const monthVoluntaryOffboarded = monthOffboardings.filter(o => !o.offboardInvoluntary).length;
         const monthInvoluntaryOffboarded = monthOffboardings.filter(o => o.offboardInvoluntary).length;
+        const monthTotalEnded = monthEnded.length;
+        const monthVoluntaryEndedCount = monthVoluntaryEnded.length;
+        const monthInvoluntaryEndedCount = monthInvoluntaryEnded.length;
         
         // Calculate turnover rate using month start headcount
         const totalEmployeesStart = employeesAtMonthStart.length;
         const turnoverRate = totalEmployeesStart > 0 ? 
                            (monthTotalOffboarded / totalEmployeesStart) * 100 : 0;
+        const endedRate = totalEmployeesStart > 0 ? 
+                           (monthTotalEnded / totalEmployeesStart) * 100 : 0;
         
         monthlyMetrics.push({
           month: monthKey,
@@ -1090,11 +1101,14 @@ export class AlexisApiClient {
           totalOffboarded: monthTotalOffboarded,
           voluntaryOffboarded: monthVoluntaryOffboarded,
           involuntaryOffboarded: monthInvoluntaryOffboarded,
-          turnoverRate: parseFloat(turnoverRate.toFixed(2))
+          totalEnded: monthTotalEnded,
+          voluntaryEnded: monthVoluntaryEndedCount,
+          involuntaryEnded: monthInvoluntaryEndedCount,
+          turnoverRate: parseFloat(turnoverRate.toFixed(2)),
+          endedRate: parseFloat(endedRate.toFixed(2))
         });
       }
       
-      console.log(`[DEBUG] Calculated metrics for ${monthlyMetrics.length} months`);
       
       // Calculate average headcount across the period for overall metrics
       // We use the first day of each month in the period
@@ -1104,6 +1118,18 @@ export class AlexisApiClient {
       const totalOffboarded = offboardings.length;
       const voluntaryOffboarded = offboardings.filter(o => !o.offboardInvoluntary).length;
       const involuntaryOffboarded = offboardings.filter(o => o.offboardInvoluntary).length;
+      
+      // Count employees who ended employment in the period (by endDate from offboarding records)
+      const endedEmployees = offboardings.filter(o => {
+        if (!o.endDate) return false;
+        const endDate = new Date(o.endDate);
+        return endDate >= start && endDate <= end;
+      });
+      const totalEnded = endedEmployees.length;
+      
+      // Count voluntary vs involuntary ended employees
+      const voluntaryEnded = endedEmployees.filter(o => !o.offboardInvoluntary).length;
+      const involuntaryEnded = endedEmployees.filter(o => o.offboardInvoluntary).length;
       
       // Calculate overall rates using average headcount
       const overallRate = averageHeadcount > 0 ? (totalOffboarded / averageHeadcount) * 100 : 0;
@@ -1122,7 +1148,10 @@ export class AlexisApiClient {
           totalEmployees: Math.round(averageHeadcount),
           totalOffboarded,
           voluntaryOffboarded,
-          involuntaryOffboarded
+          involuntaryOffboarded,
+          totalEnded,
+          voluntaryEnded,
+          involuntaryEnded
         },
         monthlyMetrics
       };

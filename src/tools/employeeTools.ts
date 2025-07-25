@@ -321,7 +321,8 @@ export const registerEmployeeTools = (server: McpServer) => {
           title: z.string().optional(),
           departmentId: z.string().optional(),
           division: z.string().optional(),
-          organization: z.string().optional()
+          organization: z.string().optional(),
+          managerEmployeeId: z.string().optional()
         })
       }
     },
@@ -388,7 +389,6 @@ export const registerEmployeeTools = (server: McpServer) => {
 
         // Create API client with JWT token
         const apiClient = new AlexisApiClient(jwtToken);
-        console.log(`[DEBUG] 11calculateTurnover called with startDate: ${startDate}, endDate: ${endDate}`);
 
         if(!startDate){
           
@@ -400,8 +400,6 @@ export const registerEmployeeTools = (server: McpServer) => {
           var tempEndDate = new Date();
           endDate = tempEndDate.toISOString().split('T')[0];
         }
-
-        console.log(`[DEBUG] 22calculateTurnover called with startDate: ${startDate}, endDate: ${endDate}`);
 
         // Calculate turnover
         const result = await apiClient.calculateTurnover(startDate, endDate);
