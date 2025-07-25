@@ -14,8 +14,10 @@ interface ExtendedEmployee extends Partial<Employee> {
   firstName: string;
   lastName: string;
   email?: string;
+  startDate?: string;
   endDate?: string;
   birthDate?: string;
+  hireDate?: string;
   gender?: string;
   departmentId?: string;
   officeId?: string;
@@ -218,7 +220,7 @@ export class AlexisApiClient {
           params: {
             limit,
             offset,
-            select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId,birthDate,gender,age,managerEmployeeId",
+            select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId,birthDate,gender,age,managerEmployeeId,hireDate",
             ...filterParams,
           },
         });
@@ -263,7 +265,7 @@ export class AlexisApiClient {
           Authorization: `${this.jwtToken}`,
         },
         params: {
-          select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId,birthDate,gender,age,managerEmployeeId",
+          select: "id,firstName,lastName,workEmail,privateEmail,privatePhone,workPhone,title,active,division,organization,employeeNumber,nationality,departmentId,officeId,birthDate,gender,age,managerEmployeeId,hireDate",
         }
       });
 
@@ -934,6 +936,8 @@ export class AlexisApiClient {
             lastName: employee.lastName,
             email: employee.email,
             birthDate: employee.birthDate,
+            hireDate: employee.hireDate,
+            active: employee.active,
             gender: employee.gender,
             division: employee.division,
             department: employee.Department,
@@ -1019,7 +1023,7 @@ export class AlexisApiClient {
       const startFormatted = start.toISOString().split('T')[0];
       const endFormatted = end.toISOString().split('T')[0];
       
-      // Get all employees including inactive to calculate correct headcount
+      // Get all employees and filter active status in the filter logic
       const allEmployeesResponse = await this.getAllEmployees(10000, {});
       const allEmployees = allEmployeesResponse.employees;
       
@@ -1037,6 +1041,21 @@ export class AlexisApiClient {
         }
       });
       
+      // Helper function to get the end date from offboarding record if available
+      const getEmployeeEndDate = (employee: ExtendedEmployee): Date | null => {
+        // Try to get endDate from offboarding record first
+        
+        const offboardRecord = offboardingMap.get(employee.id);
+        if (offboardRecord && offboardRecord.endDate) {
+          return new Date(offboardRecord.endDate);
+        }
+        // Fall back to employee's endDate if no offboarding record found
+        if (employee.endDate) {
+          return new Date(employee.endDate);
+        }
+        return null;
+      };
+      
       
       // Calculate month range
       const months: string[] = [];
@@ -1050,6 +1069,7 @@ export class AlexisApiClient {
       const monthlyMetrics = [];
       
       for (const monthKey of months) {
+        console.log("Month key: ", monthKey);
         // Define month start and end dates
         const monthStart = new Date(`${monthKey}-01T00:00:00Z`);
         const monthEnd = new Date(new Date(monthStart).setMonth(monthStart.getMonth() + 1));
@@ -1057,9 +1077,35 @@ export class AlexisApiClient {
         
         // Count employees at start of month (active on first day of month)
         const employeesAtMonthStart = allEmployees.filter(employee => {
-          // Employee must have started before or on month start
-          // And either no end date or end date after month start
-          return (!employee.endDate || new Date(employee.endDate) >= monthStart);
+          // Employee must be active
+          // AND either no end date or end date after month start
+          // Get employee's end date from offboarding record or employee data
+          const endDate = getEmployeeEndDate(employee);
+          // Get employee's hire date 
+          const hireDate = employee.hireDate ? new Date(employee.hireDate) : null;
+          
+          // An employee should be counted if they were employed at the start of the month:
+          // 1. Active employees: must have been hired on or before month start AND not ended yet or ended after month start
+          // 2. Inactive employees: must have end date after month start (meaning they were still active at month start)
+          
+          const isActiveAtMonthStart = 
+            // Case 1: Currently active employee
+            (employee.active === true && 
+              // Either has no end date or ended after month start
+              (!endDate || endDate >= monthStart) &&
+              // AND was hired before or exactly on month start
+              (hireDate && hireDate <= monthStart)
+            ) || 
+            // Case 2: Inactive employee who was active at month start
+            (employee.active === false && 
+              // Must have end date after month start
+              endDate && endDate >= monthStart &&
+              // AND was hired before or exactly on month start
+              (hireDate && hireDate <= monthStart)
+            );
+
+          
+          return isActiveAtMonthStart;
         });
         
         // Count offboardings during this month
