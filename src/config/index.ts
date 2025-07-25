@@ -25,3 +25,6 @@ export const SERVER_INFO = {
   version: '1.0.0',
   description: 'AlexisHR MCP Server supporting both legacy SSE and stream protocols'
 };
+
+// MCP Server timeout configuration (in milliseconds)
+export const MCP_TIMEOUT = process.env.MCP_TIMEOUT ? parseInt(process.env.MCP_TIMEOUT, 10) : 120000; // 2 minutes default

@@ -1,18 +1,27 @@
 import express from 'express';
 import getRawBody from 'raw-body';
 import cors from 'cors';
+import http from 'http';
 import { randomUUID } from 'crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 
-import { PORT, SERVER_INFO } from './config';
+import { PORT, SERVER_INFO, MCP_TIMEOUT } from './config';
 import { registerAllTools } from './tools';
 import { validateJwtToken } from './auth/jwtAuth';
 
 // Create Express app
 const app = express();
+
+// Set server timeout for long requests
+app.use((req, res, next) => {
+  res.setTimeout(MCP_TIMEOUT, () => {
+    console.log('Request timed out:', req.url);
+  });
+  next();
+});
 
 // Middleware
 app.use((req, res, next) => {
@@ -59,8 +68,29 @@ app.all('/mcp', async (req, res) => {
         });
       }
       
-      // Create SSE transport and connect to server
+      // Configure response for long-lived SSE connection
+      req.socket.setTimeout(MCP_TIMEOUT);
+      if (res.connection) {
+        res.connection.setTimeout(MCP_TIMEOUT);
+      }
+      
+      // Disable response buffering for SSE
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      
+      // Create SSE transport with extended timeout
       const sseTransport = new SSEServerTransport('/messages', res);
+      console.log(`SSE transport created with ${MCP_TIMEOUT/1000}s timeout`);
+      
+      // Store transport for management
+      const sessionId = randomUUID();
+      sseTransports[sessionId] = sseTransport;
+      
+      // Setup cleanup when connection closes
+      req.on('close', () => {
+        console.log(`SSE connection closed, cleaning up session ${sessionId}`);
+        delete sseTransports[sessionId];
+      });
       
       // Connect transport to MCP server
       await server.connect(sseTransport);
@@ -234,9 +264,16 @@ app.get('/health', (_, res) => {
   res.json({ status: 'ok' });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`AlexisHR MCP Server listening on port ${PORT}`);
+// Start server with extended timeout
+const httpServer = http.createServer(app);
+
+// Set server timeouts
+httpServer.timeout = MCP_TIMEOUT;
+httpServer.keepAliveTimeout = MCP_TIMEOUT / 2;
+httpServer.headersTimeout = MCP_TIMEOUT;
+
+httpServer.listen(PORT, () => {
+  console.log(`AlexisHR MCP Server listening on port ${PORT} with ${MCP_TIMEOUT/1000}s timeout`);
   console.log(`Health check available at http://localhost:${PORT}/health`);
   console.log(`MCP endpoint: /mcp?transportType=streamable-http (modern), /mcp?transportType=sse (SSE)`);
   console.log(`Legacy endpoints: /sse and /messages also supported`);

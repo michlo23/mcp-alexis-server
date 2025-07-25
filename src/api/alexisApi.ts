@@ -781,37 +781,125 @@ export class AlexisApiClient {
   }
 
   /**
-   * Get raw offboarding data via GraphQL
-   * @returns List of offboarding records
+   * Execute a GraphQL query with proper error handling and retries
+   * @param query The GraphQL query string
+   * @param variables Variables for the GraphQL query
+   * @param version API version to use ('v2' or empty string for default)
+   * @param silent Whether to suppress error logging
+   * @param options Additional options like retries and timeout
+   * @returns The data from the GraphQL response
    */
-  async getOffboardingList(): Promise<Offboarding[]> {
+  async executeGraphQL(query: string, variables: any = {}, version = 'v2', silent = false, options: any = {}) {
     try {
-      const query = `{
-        offboardings {
-          id
-          employeeId
-          offboardDate
-          offboardComment
-          offboardInvoluntary
-        }
-      }`;
+      const {
+        retries = 3,
+        timeout = 30000
+      } = options;
 
-      const response = await axios.post(
-        ALEXIS_GRAPHQL_API_URL,
-        { query },
+      // Determine the GraphQL endpoint
+      const graphqlEndpoint = version === 'v2' ? '/v2/graphql' : '/graphql';
+      const graphqlUrl = ALEXIS_GRAPHQL_API_URL || 'https://api.alexishr.com/v2/graphql';
+      
+      // Create a separate axios instance for GraphQL
+      const graphqlClient = axios.create();
+        
+      // Configure logging label
+      const serviceName = silent ? 'GraphQL (silent)' : `GraphQL ${graphqlEndpoint}`;
+      
+      const response = await graphqlClient.post(
+        graphqlUrl,
+        {
+          query,
+          variables
+        },
         {
           headers: {
-            Authorization: `${this.jwtToken}`,
+            'Authorization': this.jwtToken,
             'Content-Type': 'application/json'
           }
         }
       );
 
+      // Check for errors in the response
       if (response.data.errors) {
-        throw new Error(`GraphQL errors: ${JSON.stringify(response.data.errors)}`);
+        // If we have data alongside errors, log the errors as warnings but return the data
+        if (response.data.data) {
+          if (!silent) {
+            console.warn('GraphQL partial errors (returning available data):', {
+              errors: response.data.errors,
+              errorCount: response.data.errors.length,
+              query: query.split('\n')[0].trim() // First line of query for context
+            });
+          }
+          return response.data.data;
+        } else {
+          // If we have errors but no data, throw the error
+          throw new Error(response.data.errors[0].message);
+        }
       }
 
-      return response.data.data.offboardings;
+      return response.data.data;
+    } catch (error) {
+      if (!silent) {
+        console.error('GraphQL execution error:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get raw offboarding data via GraphQL
+   * @returns List of offboarding records, deduplicated by employeeId (keeping newest by created date)
+   */
+  async getOffboardingList(): Promise<Offboarding[]> {
+    try {
+      const query = `
+        query Data {
+          offboardingList {
+            data {
+              id
+              employeeId
+              offboardDate
+              offboardComment
+              offboardInvoluntary
+              endDate
+              created
+            }
+          }
+        }
+      `;
+
+      const result = await this.executeGraphQL(query, {}, 'v2');
+      
+      if (!result?.offboardingList?.data) {
+        console.error('Invalid response format for offboardings');
+        return [];
+      }
+
+      const allOffboardings = result.offboardingList.data;
+      console.log(`[DEBUG] Got ${allOffboardings.length} total offboarding records`);
+      
+      // Deduplicate records by employeeId, keeping only the newest record by created date
+      const employeeMap = new Map();
+      
+      // Group records by employeeId
+      allOffboardings.forEach((record: Offboarding) => {
+        if (!record.employeeId) {
+          return; // Skip records without employeeId
+        }
+        
+        // If we don't have this employee yet, or this record is newer than what we have
+        if (!employeeMap.has(record.employeeId) || 
+            new Date(record.created) > new Date(employeeMap.get(record.employeeId).created)) {
+          employeeMap.set(record.employeeId, record);
+        }
+      });
+      
+      // Get unique records (newest per employee)
+      const uniqueOffboardings = Array.from(employeeMap.values());
+      console.log(`[DEBUG] After deduplication: ${uniqueOffboardings.length} unique offboarding records (removed ${allOffboardings.length - uniqueOffboardings.length} duplicates)`);
+      
+      return uniqueOffboardings;
     } catch (error) {
       console.error('Error fetching offboarding data:', error);
       throw error;
@@ -827,15 +915,20 @@ export class AlexisApiClient {
     try {
       // Get raw offboarding data
       const offboardings = await this.getOffboardingList();
+      console.log(`[DEBUG] Got ${offboardings.length} offboardings from GraphQL`); 
       
       // Get all employees for joining
       const { employees } = await this.getAllEmployees(1000, { active: false });
+      console.log(`[DEBUG] Got ${employees.length} inactive employees for joining`);
       
       // Join employee details with offboarding data
       let result = offboardings.map(offboarding => {
         const employee = employees.find(e => e.id === offboarding.employeeId);
         
-        if (!employee) return null;
+        if (!employee) {
+          console.log(`[DEBUG] No employee found for offboarding with employeeId ${offboarding.employeeId}`);
+          return null;
+        }
         
         return {
           ...offboarding,
@@ -849,46 +942,59 @@ export class AlexisApiClient {
             division: employee.division,
             department: employee.Department,
             office: employee.Office,
-            endDate: employee.endDate
+            endDate: employee.endDate || offboarding.endDate // Use offboarding endDate as fallback
           }
         };
       }).filter(item => item !== null) as Offboarding[];
       
+      console.log(`[DEBUG] After joining, got ${result.length} valid offboardings`);
+      
       // Apply filters if any
       if (filters) {
+        console.log(`[DEBUG] Applying filters:`, filters);
+        
         // Date range filters
+        console.log(`[DEBUG] startDate: ${filters.startDate}`);
+        console.log(`[DEBUG] endDate: ${filters.endDate}`);
         if (filters.startDate) {
+          const beforeCount = result.length;
           result = result.filter(item => 
             new Date(item.offboardDate) >= new Date(filters.startDate)
           );
+          console.log(`[DEBUG] After startDate filter: ${result.length} offboardings (filtered out ${beforeCount - result.length})`);
         }
         
         if (filters.endDate) {
+          const beforeCount = result.length;
           result = result.filter(item => 
             new Date(item.offboardDate) <= new Date(filters.endDate)
           );
+          console.log(`[DEBUG] After endDate filter: ${result.length} offboardings (filtered out ${beforeCount - result.length})`);
         }
         
         // Voluntary/involuntary filter
         if (filters.offboardInvoluntary !== undefined) {
-          result = result.filter(item => 
+          const beforeCount = result.length;
+          result = result.filter(item =>
             item.offboardInvoluntary === filters.offboardInvoluntary
           );
+          console.log(`[DEBUG] After offboardInvoluntary filter: ${result.length} offboardings (filtered out ${beforeCount - result.length})`);
         }
       }
       
+      console.log(`[DEBUG] Final result: ${result.length} offboardings`);
       return result;
     } catch (error) {
-      console.error('Error fetching offboardings with details:', error);
+      console.error('Error fetching offboardings:', error);
       throw error;
     }
   }
 
   /**
-   * Calculate turnover rate for a specific period
+   * Calculate turnover rate for a specific period with monthly breakdown
    * @param startDate Optional start date (default: 12 months ago)
    * @param endDate Optional end date (default: today)
-   * @returns Turnover metrics
+   * @returns Turnover metrics with monthly breakdown
    */
   async calculateTurnover(startDate?: string, endDate?: string): Promise<{
     period: { start: string; end: string };
@@ -901,37 +1007,108 @@ export class AlexisApiClient {
       voluntaryOffboarded: number;
       involuntaryOffboarded: number;
     };
+    monthlyMetrics: Array<{
+      month: string;
+      totalEmployeesStart: number;
+      totalOffboarded: number;
+      voluntaryOffboarded: number;
+      involuntaryOffboarded: number;
+      turnoverRate: number;
+    }>;
   }> {
     try {
       // Default period: last 12 months
+      console.log(`[DEBUG] calculateTurnover called with startDate: ${startDate}, endDate: ${endDate}`);
       const today = new Date();
       const end = endDate ? new Date(endDate) : today;
-      const start = startDate ? new Date(startDate) : new Date(today.setFullYear(today.getFullYear() - 1));
+      const start = startDate ? new Date(startDate) : new Date(new Date().setFullYear(today.getFullYear() - 1));
       
       // Format dates for filtering and response
       const startFormatted = start.toISOString().split('T')[0];
       const endFormatted = end.toISOString().split('T')[0];
       
+      // Get all employees including inactive to calculate correct headcount
+      console.log(`[DEBUG] Getting all employees (including inactive) for headcount calculation`);
+      const allEmployeesResponse = await this.getAllEmployees(10000, {});
+      const allEmployees = allEmployeesResponse.employees;
+      
+      console.log(`[DEBUG] Getting offboardings for period ${startFormatted} to ${endFormatted}`);
       // Get offboardings for the period
       const offboardings = await this.getOffboardings({
         startDate: startFormatted,
         endDate: endFormatted
       });
       
-      // Get total active employees
-      const { metadata } = await this.getAllEmployees(1, { active: true });
-      const totalActiveEmployees = metadata.totalAvailable;
+      console.log(`[DEBUG] Got ${offboardings.length} offboardings in the period`);
       
-      // Count offboarded employees by type
+      // Calculate month range
+      const months: string[] = [];
+      const currentDate = new Date(start);
+      while (currentDate <= end) {
+        months.push(currentDate.toISOString().substring(0, 7)); // YYYY-MM format
+        currentDate.setMonth(currentDate.getMonth() + 1);
+      }
+      
+      console.log(`[DEBUG] Analyzing ${months.length} months: ${months.join(', ')}`);
+      
+      // Calculate metrics for each month
+      const monthlyMetrics = [];
+      
+      for (const monthKey of months) {
+        // Define month start and end dates
+        const monthStart = new Date(`${monthKey}-01T00:00:00Z`);
+        const monthEnd = new Date(new Date(monthStart).setMonth(monthStart.getMonth() + 1));
+        monthEnd.setDate(monthEnd.getDate() - 1); // Last day of month
+        
+        // Count employees at start of month (active on first day of month)
+        const employeesAtMonthStart = allEmployees.filter(employee => {
+          // Employee must have started before or on month start
+          // And either no end date or end date after month start
+          return (!employee.endDate || new Date(employee.endDate) >= monthStart);
+        });
+        
+        // Count offboardings during this month
+        const monthOffboardings = offboardings.filter(o => {
+          const offboardDate = o.offboardDate ? new Date(o.offboardDate) : (o.endDate ? new Date(o.endDate) : null);
+          return offboardDate && 
+                 offboardDate >= monthStart && 
+                 offboardDate <= monthEnd;
+        });
+        
+        const monthTotalOffboarded = monthOffboardings.length;
+        const monthVoluntaryOffboarded = monthOffboardings.filter(o => !o.offboardInvoluntary).length;
+        const monthInvoluntaryOffboarded = monthOffboardings.filter(o => o.offboardInvoluntary).length;
+        
+        // Calculate turnover rate using month start headcount
+        const totalEmployeesStart = employeesAtMonthStart.length;
+        const turnoverRate = totalEmployeesStart > 0 ? 
+                           (monthTotalOffboarded / totalEmployeesStart) * 100 : 0;
+        
+        monthlyMetrics.push({
+          month: monthKey,
+          totalEmployeesStart,
+          totalOffboarded: monthTotalOffboarded,
+          voluntaryOffboarded: monthVoluntaryOffboarded,
+          involuntaryOffboarded: monthInvoluntaryOffboarded,
+          turnoverRate: parseFloat(turnoverRate.toFixed(2))
+        });
+      }
+      
+      console.log(`[DEBUG] Calculated metrics for ${monthlyMetrics.length} months`);
+      
+      // Calculate average headcount across the period for overall metrics
+      // We use the first day of each month in the period
+      const averageHeadcount = monthlyMetrics.reduce((sum, month) => sum + month.totalEmployeesStart, 0) / monthlyMetrics.length;
+      
+      // Count offboarded employees by type for the whole period
       const totalOffboarded = offboardings.length;
       const voluntaryOffboarded = offboardings.filter(o => !o.offboardInvoluntary).length;
       const involuntaryOffboarded = offboardings.filter(o => o.offboardInvoluntary).length;
       
-      // Calculate rates
-      const totalEmployees = totalActiveEmployees + totalOffboarded;
-      const overallRate = totalEmployees > 0 ? (totalOffboarded / totalEmployees) * 100 : 0;
-      const voluntaryRate = totalEmployees > 0 ? (voluntaryOffboarded / totalEmployees) * 100 : 0;
-      const involuntaryRate = totalEmployees > 0 ? (involuntaryOffboarded / totalEmployees) * 100 : 0;
+      // Calculate overall rates using average headcount
+      const overallRate = averageHeadcount > 0 ? (totalOffboarded / averageHeadcount) * 100 : 0;
+      const voluntaryRate = averageHeadcount > 0 ? (voluntaryOffboarded / averageHeadcount) * 100 : 0;
+      const involuntaryRate = averageHeadcount > 0 ? (involuntaryOffboarded / averageHeadcount) * 100 : 0;
       
       return {
         period: {
@@ -942,11 +1119,12 @@ export class AlexisApiClient {
           overallRate: parseFloat(overallRate.toFixed(2)),
           voluntaryRate: parseFloat(voluntaryRate.toFixed(2)),
           involuntaryRate: parseFloat(involuntaryRate.toFixed(2)),
-          totalEmployees,
+          totalEmployees: Math.round(averageHeadcount),
           totalOffboarded,
           voluntaryOffboarded,
           involuntaryOffboarded
-        }
+        },
+        monthlyMetrics
       };
     } catch (error) {
       console.error('Error calculating turnover rate:', error);

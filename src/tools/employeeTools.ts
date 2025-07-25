@@ -381,13 +381,28 @@ export const registerEmployeeTools = (server: McpServer) => {
       try {
         // Get JWT token from request
         const jwtToken = context.requestInfo.headers.authorization;
+        
         if (!jwtToken) {
           throw new Error('Authentication required');
         }
 
         // Create API client with JWT token
         const apiClient = new AlexisApiClient(jwtToken);
-        
+        console.log(`[DEBUG] 11calculateTurnover called with startDate: ${startDate}, endDate: ${endDate}`);
+
+        if(!startDate){
+          
+          var tempStartDate = new Date();
+          tempStartDate.setFullYear(tempStartDate.getFullYear() - 1);
+          startDate = tempStartDate.toISOString().split('T')[0];
+        }
+        if(!endDate){
+          var tempEndDate = new Date();
+          endDate = tempEndDate.toISOString().split('T')[0];
+        }
+
+        console.log(`[DEBUG] 22calculateTurnover called with startDate: ${startDate}, endDate: ${endDate}`);
+
         // Calculate turnover
         const result = await apiClient.calculateTurnover(startDate, endDate);
         
@@ -437,12 +452,26 @@ export const registerEmployeeTools = (server: McpServer) => {
         // Create API client with JWT token
         const apiClient = new AlexisApiClient(jwtToken);
         
+
+        if(!startDate){
+          
+          var tempStartDate = new Date();
+          tempStartDate.setMonth(tempStartDate.getMonth() - 3);
+          startDate = tempStartDate.toISOString().split('T')[0];
+        }
+        if(!endDate){
+          var tempEndDate = new Date();
+          tempEndDate.setMonth(tempEndDate.getMonth() + 6);
+          endDate = tempEndDate.toISOString().split('T')[0];
+        }
         // Get offboardings with filters
         const filters: OffboardingFilters = {};
         if (startDate) filters.startDate = startDate;
         if (endDate) filters.endDate = endDate;
         if (offboardInvoluntary !== undefined) filters.offboardInvoluntary = offboardInvoluntary;
         
+
+
         const result = await apiClient.getOffboardings(filters);
         
         return {
