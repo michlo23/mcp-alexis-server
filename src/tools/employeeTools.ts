@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AlexisApiClient } from '../api/alexisApi';
-import { EmployeeFilters } from '../types/alexis';
+import { EmployeeFilters, OffboardingFilters } from '../types/alexis';
 import { Request } from 'express';
 import { calculateDemographicCounts, DemographicCounts } from '../utils/countUtils';
 
@@ -306,15 +306,15 @@ export const registerEmployeeTools = (server: McpServer) => {
       }
     }
   );
-  
+
   /**
-   * updateEmployee tool - Updates specific fields of an employee
+   * updateEmployee tool - Updates an employee's fields
    */
   server.registerTool(
     'updateEmployee',
     {
       title: 'Update Employee',
-      description: 'Updates specific fields of an employee in the AlexisHR system.',
+      description: 'Updates specific fields of an employee record.',
       inputSchema: {
         employeeId: z.string(),
         data: z.object({
@@ -336,23 +336,27 @@ export const registerEmployeeTools = (server: McpServer) => {
         // Create API client with JWT token
         const apiClient = new AlexisApiClient(jwtToken);
         
-        // Make API call to update employee
+        // Update employee
         const result = await apiClient.updateEmployee(employeeId, data);
         
         return {
           content: [{ 
             type: 'text', 
-            text: JSON.stringify(result, null, 2)
+            text: JSON.stringify({
+              success: true,
+              message: 'Employee updated successfully',
+              employee: result
+            }, null, 2) 
           }]
         };
       } catch (error: any) {
-        console.error(`Error in updateEmployee tool (ID: ${employeeId}):`, error);
+        console.error('Error in updateEmployee tool:', error);
         return {
           content: [{ 
             type: 'text', 
             text: JSON.stringify({ 
               error: true, 
-              message: error.message || `Failed to update employee with ID ${employeeId}` 
+              message: error.message || 'Failed to update employee' 
             }, null, 2)
           }]
         };
@@ -360,6 +364,107 @@ export const registerEmployeeTools = (server: McpServer) => {
     }
   );
 
+  /**
+   * calculateTurnover tool - Calculate employee turnover rate for a specific period
+   */
+  server.registerTool(
+    'calculateTurnover',
+    {
+      title: 'Calculate Turnover Rate',
+      description: 'Calculate employee turnover rate and related metrics for a specific period (default: last 12 months).',
+      inputSchema: {
+        startDate: z.string().optional().describe('Start date in YYYY-MM-DD format (default: 12 months ago)'),
+        endDate: z.string().optional().describe('End date in YYYY-MM-DD format (default: today)')
+      }
+    },
+    async ({ startDate, endDate }: { startDate?: string; endDate?: string }, context: any) => {
+      try {
+        // Get JWT token from request
+        const jwtToken = context.requestInfo.headers.authorization;
+        if (!jwtToken) {
+          throw new Error('Authentication required');
+        }
+
+        // Create API client with JWT token
+        const apiClient = new AlexisApiClient(jwtToken);
+        
+        // Calculate turnover
+        const result = await apiClient.calculateTurnover(startDate, endDate);
+        
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify(result, null, 2) 
+          }]
+        };
+      } catch (error: any) {
+        console.error('Error in calculateTurnover tool:', error);
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({ 
+              error: true, 
+              message: error.message || 'Failed to calculate turnover rate' 
+            }, null, 2)
+          }]
+        };
+      }
+    }
+  );
+  
+  /**
+   * getOffboardings tool - Get list of offboarded employees with details
+   */
+  server.registerTool(
+    'getOffboardings',
+    {
+      title: 'Get Offboardings',
+      description: 'Get a list of offboarded employees with details, filterable by date range and type (voluntary/involuntary).',
+      inputSchema: {
+        startDate: z.string().optional().describe('Start date in YYYY-MM-DD format'),
+        endDate: z.string().optional().describe('End date in YYYY-MM-DD format'),
+        offboardInvoluntary: z.boolean().optional().describe('Filter by involuntary (true) or voluntary (false)')
+      }
+    },
+    async ({ startDate, endDate, offboardInvoluntary }: { startDate?: string; endDate?: string; offboardInvoluntary?: boolean }, context: any) => {
+      try {
+        // Get JWT token from request
+        const jwtToken = context.requestInfo.headers.authorization;
+        if (!jwtToken) {
+          throw new Error('Authentication required');
+        }
+
+        // Create API client with JWT token
+        const apiClient = new AlexisApiClient(jwtToken);
+        
+        // Get offboardings with filters
+        const filters: OffboardingFilters = {};
+        if (startDate) filters.startDate = startDate;
+        if (endDate) filters.endDate = endDate;
+        if (offboardInvoluntary !== undefined) filters.offboardInvoluntary = offboardInvoluntary;
+        
+        const result = await apiClient.getOffboardings(filters);
+        
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify(result, null, 2) 
+          }]
+        };
+      } catch (error: any) {
+        console.error('Error in getOffboardings tool:', error);
+        return {
+          content: [{ 
+            type: 'text', 
+            text: JSON.stringify({ 
+              error: true, 
+              message: error.message || 'Failed to fetch offboardings' 
+            }, null, 2)
+          }]
+        };
+      }
+    }
+  );
 
   /**
    * getEmployeeCountByDivision tool - Returns the count of active employees grouped by division

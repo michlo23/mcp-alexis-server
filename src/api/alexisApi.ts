@@ -1,9 +1,11 @@
 import axios from 'axios';
-import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL, ALEXIS_OFFICE_API_URL, ALEXIS_API_BASE_URL } from '../config';
+import { ALEXIS_EMPLOYEE_API_URL, ALEXIS_DEPARTMENT_API_URL, ALEXIS_LEAVE_API_URL, ALEXIS_OFFICE_API_URL, ALEXIS_API_BASE_URL, ALEXIS_GRAPHQL_API_URL } from '../config';
 
 // Define the leave-type API URL
 const ALEXIS_LEAVE_TYPE_API_URL = `${ALEXIS_API_BASE_URL}/leave-type`;
-import { Employee, Department, Office, Leave } from '../types/alexis';
+const ALEXIS_OFFBOARDING_TYPE_API_URL = `${ALEXIS_API_BASE_URL}/offboarding-type`;
+
+import { Employee, Department, Office, Leave, Offboarding } from '../types/alexis';
 
 // Extended interfaces to handle property differences between API responses
 interface ExtendedEmployee extends Partial<Employee> {
@@ -11,12 +13,17 @@ interface ExtendedEmployee extends Partial<Employee> {
   id: string;
   firstName: string;
   lastName: string;
+  email?: string;
+  endDate?: string;
+  birthDate?: string;
+  gender?: string;
   departmentId?: string;
   officeId?: string;
   managerEmployeeId?: string;
   Department?: string | null;
   Office?: string | null;
   managerName?: string | null;
+  division?: string;
 }
 
 interface SimplifiedDepartment {
@@ -769,6 +776,180 @@ export class AlexisApiClient {
       return response.data;
     } catch (error) {
       console.error(`Error fetching office ${officeId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get raw offboarding data via GraphQL
+   * @returns List of offboarding records
+   */
+  async getOffboardingList(): Promise<Offboarding[]> {
+    try {
+      const query = `{
+        offboardings {
+          id
+          employeeId
+          offboardDate
+          offboardComment
+          offboardInvoluntary
+        }
+      }`;
+
+      const response = await axios.post(
+        ALEXIS_GRAPHQL_API_URL,
+        { query },
+        {
+          headers: {
+            Authorization: `${this.jwtToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      if (response.data.errors) {
+        throw new Error(`GraphQL errors: ${JSON.stringify(response.data.errors)}`);
+      }
+
+      return response.data.data.offboardings;
+    } catch (error) {
+      console.error('Error fetching offboarding data:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get offboardings with employee details
+   * @param filters Optional filters for offboarding data
+   * @returns List of offboarded employees with details
+   */
+  async getOffboardings(filters: Record<string, any> = {}): Promise<Offboarding[]> {
+    try {
+      // Get raw offboarding data
+      const offboardings = await this.getOffboardingList();
+      
+      // Get all employees for joining
+      const { employees } = await this.getAllEmployees(1000, { active: false });
+      
+      // Join employee details with offboarding data
+      let result = offboardings.map(offboarding => {
+        const employee = employees.find(e => e.id === offboarding.employeeId);
+        
+        if (!employee) return null;
+        
+        return {
+          ...offboarding,
+          employee: {
+            id: employee.id,
+            firstName: employee.firstName,
+            lastName: employee.lastName,
+            email: employee.email,
+            birthDate: employee.birthDate,
+            gender: employee.gender,
+            division: employee.division,
+            department: employee.Department,
+            office: employee.Office,
+            endDate: employee.endDate
+          }
+        };
+      }).filter(item => item !== null) as Offboarding[];
+      
+      // Apply filters if any
+      if (filters) {
+        // Date range filters
+        if (filters.startDate) {
+          result = result.filter(item => 
+            new Date(item.offboardDate) >= new Date(filters.startDate)
+          );
+        }
+        
+        if (filters.endDate) {
+          result = result.filter(item => 
+            new Date(item.offboardDate) <= new Date(filters.endDate)
+          );
+        }
+        
+        // Voluntary/involuntary filter
+        if (filters.offboardInvoluntary !== undefined) {
+          result = result.filter(item => 
+            item.offboardInvoluntary === filters.offboardInvoluntary
+          );
+        }
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('Error fetching offboardings with details:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Calculate turnover rate for a specific period
+   * @param startDate Optional start date (default: 12 months ago)
+   * @param endDate Optional end date (default: today)
+   * @returns Turnover metrics
+   */
+  async calculateTurnover(startDate?: string, endDate?: string): Promise<{
+    period: { start: string; end: string };
+    metrics: {
+      overallRate: number;
+      voluntaryRate: number;
+      involuntaryRate: number;
+      totalEmployees: number;
+      totalOffboarded: number;
+      voluntaryOffboarded: number;
+      involuntaryOffboarded: number;
+    };
+  }> {
+    try {
+      // Default period: last 12 months
+      const today = new Date();
+      const end = endDate ? new Date(endDate) : today;
+      const start = startDate ? new Date(startDate) : new Date(today.setFullYear(today.getFullYear() - 1));
+      
+      // Format dates for filtering and response
+      const startFormatted = start.toISOString().split('T')[0];
+      const endFormatted = end.toISOString().split('T')[0];
+      
+      // Get offboardings for the period
+      const offboardings = await this.getOffboardings({
+        startDate: startFormatted,
+        endDate: endFormatted
+      });
+      
+      // Get total active employees
+      const { metadata } = await this.getAllEmployees(1, { active: true });
+      const totalActiveEmployees = metadata.totalAvailable;
+      
+      // Count offboarded employees by type
+      const totalOffboarded = offboardings.length;
+      const voluntaryOffboarded = offboardings.filter(o => !o.offboardInvoluntary).length;
+      const involuntaryOffboarded = offboardings.filter(o => o.offboardInvoluntary).length;
+      
+      // Calculate rates
+      const totalEmployees = totalActiveEmployees + totalOffboarded;
+      const overallRate = totalEmployees > 0 ? (totalOffboarded / totalEmployees) * 100 : 0;
+      const voluntaryRate = totalEmployees > 0 ? (voluntaryOffboarded / totalEmployees) * 100 : 0;
+      const involuntaryRate = totalEmployees > 0 ? (involuntaryOffboarded / totalEmployees) * 100 : 0;
+      
+      return {
+        period: {
+          start: startFormatted,
+          end: endFormatted
+        },
+        metrics: {
+          overallRate: parseFloat(overallRate.toFixed(2)),
+          voluntaryRate: parseFloat(voluntaryRate.toFixed(2)),
+          involuntaryRate: parseFloat(involuntaryRate.toFixed(2)),
+          totalEmployees,
+          totalOffboarded,
+          voluntaryOffboarded,
+          involuntaryOffboarded
+        }
+      };
+    } catch (error) {
+      console.error('Error calculating turnover rate:', error);
       throw error;
     }
   }

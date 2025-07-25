@@ -14,6 +14,7 @@ export const ALEXIS_EMPLOYEE_API_URL = process.env.ALEXIS_EMPLOYEE_API_URL || 'h
 export const ALEXIS_DEPARTMENT_API_URL = process.env.ALEXIS_DEPARTMENT_API_URL || 'https://api.alexishr.com/v1/department';
 export const ALEXIS_LEAVE_API_URL = process.env.ALEXIS_LEAVE_API_URL || 'https://api.alexishr.com/v1/leave';
 export const ALEXIS_OFFICE_API_URL = process.env.ALEXIS_OFFICE_API_URL || 'https://api.alexishr.com/v1/office';
+export const ALEXIS_GRAPHQL_API_URL = process.env.ALEXIS_GRAPHQL_API_URL || 'https://api.alexishr.com/v2/graphql';
 
 // Logging
 export const LOG_LEVEL = process.env.LOG_LEVEL || 'info';

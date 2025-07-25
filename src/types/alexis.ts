@@ -43,6 +43,54 @@ export interface EmployeeResponse {
   };
 }
 
+// Offboarding types
+export interface Offboarding {
+  anonymizeDate: string | null;
+  companyId: string;
+  created: string;
+  createdById: string;
+  deleteDate: string | null;
+  employeeId: string;
+  employeeManagerEffectiveDate: string | null;
+  employeeManagerUserId: string | null;
+  endDate: string;
+  id: string;
+  offboardComment: string;
+  offboardDate: string;
+  offboardInvoluntary: boolean;
+  transferOwnershipUserId: string | null;
+  userId: string;
+  employeeDetails?: Employee; // For joining with employee data
+}
+
+export interface OffboardingFilters {
+  startDate?: string;
+  endDate?: string;
+  offboardInvoluntary?: boolean;
+}
+
+export interface OffboardingResponse {
+  offboardings: Offboarding[];
+  metadata: {
+    count: number;
+    totalCount: number;
+    startDate?: string;
+    endDate?: string;
+  };
+}
+
+export interface TurnoverResponse {
+  turnoverRate: number;
+  voluntaryRate: number;
+  involuntaryRate: number;
+  totalEmployees: number;
+  offboardedEmployees: number;
+  voluntaryOffboardings: number;
+  involuntaryOffboardings: number;
+  startDate: string;
+  endDate: string;
+}
+
 // Department types
 export interface Department {
   id: string;
